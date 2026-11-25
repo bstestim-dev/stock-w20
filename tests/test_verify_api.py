@@ -55,7 +55,7 @@ class RouteClient:
                 return {"msg": "success", "status": 200, "data": [{"date": "2026-11-20"}]}
             return {"msg": "success", "status": 200, "data": [
                 {"industry_category": "ETF", "stock_id": "0050", "stock_name": "元大台灣50", "type": "twse", "date": "2024-01-01"},
-                {"industry_category": "ETF", "stock_id": "0050", "stock_name": "元大台灣50", "type": "twse", "date": None}]}
+                {"industry_category": "ETF", "stock_id": "0050", "stock_name": "元大台灣50", "type": "twse", "date": "None"}]}
         if "t187ap03_L" in url:
             return [{"公司代號": "2330", "公司簡稱": "台積電", "產業別": "24", "普通股每股面額": "新台幣 10.0000元",
                      "實收資本額": "259323700670", "特別股": "0", "已發行普通股數或TDR原股發行股數": "25932370067"}]
@@ -82,8 +82,10 @@ def test_verify_run_and_render(tmp_path):
     assert items["解析器：TPEx parse_insti_net（取「三大法人買賣超股數合計」）"][0] == "通過"
     assert items["解析器：TPEx 櫃買指數 fetch_otc_index_month"][0] == "通過"
     assert items["run2：法人欄位關係（第3+4+7組買賣超＝合計，僅佐證不用於取值）"][0] == "通過"
-    assert items["run2：TPEx 無收盤價列（含 '---'）之成交股數"][0] == "通過"
-    assert "run2：FinMind TaiwanStockInfo date 為 null 的列" in items
+    assert items["run3：TPEx 無收盤價列（含 '---'）成交股數皆不足 1,000 股（D2）"][0] == "通過"
+    assert "run3：FinMind TaiwanStockInfo 無日期列（D1）" in items
+    assert "'None'" in items["run3：FinMind TaiwanStockInfo 無日期列（D1）"][1]
+    assert "run3：FinMind 交易日表含今日之後的日期（D4）" in items
     assert items["解析器：FinMind TaiwanStockInfo"][0] == "通過"
     assert any(r["ok"] is False for r in v.results)          # 失敗探測也被記錄而不中斷
     assert (tmp_path / "raw").is_dir()

@@ -197,7 +197,7 @@ def run(v: Verifier, sample: date, window_end: date) -> None:
                 got = v.parse_check(label, lambda p=p: twse.parse_events(p, kind), lambda r: f"{len(r)} 筆")
                 events.extend(got or [])
         codes = {ev.code for ev in events}
-        watch = {"dividend": ["2330", "00939"], "par_value_change": ["4763"]}.get(kind, [])
+        watch = {"dividend": ["2330", "00939"]}.get(kind, [])  # 4763 事件日 2025-06-30（run2），不在一年窗內
         if watch:
             v.check(f"TWSE {spec[0]} 一年內含 {watch}", all(c in codes for c in watch), f"命中 {[c for c in watch if c in codes]}；共 {len(events)} 筆")
         bad = [ev for ev in events if not (ev.p_before and ev.p_ref and ev.p_before > 0 and ev.p_ref > 0)]
@@ -232,7 +232,7 @@ def run(v: Verifier, sample: date, window_end: date) -> None:
         try:
             m = tpex.parse_daily_quotes(dq[sample], sample, prefilter=True)
             no_px = [(q.code, q.name, q.volume_shares) for q in m.quotes if q.close is None]
-            v.check("run2：TPEx 無收盤價列（含 '---'）之成交股數", all((x[2] or 0) == 0 for x in no_px),
+            v.check("run3：TPEx 無收盤價列（含 '---'）成交股數皆不足 1,000 股（D2）", all((x[2] or 0) < 1000 for x in no_px),
                     f"{len(no_px)} 檔：{no_px[:20]}")
             mgmt = next((t for t in extract_tables(dq[sample]) if t.get("title") == "管理股票"), None)
             v.check("run2：TPEx dailyQuotes「管理股票」表列數", None, f"{len(mgmt.get('data') or []) if mgmt else '無此表'}")
@@ -296,9 +296,12 @@ def run(v: Verifier, sample: date, window_end: date) -> None:
     info = v.probe("FinMind TaiwanStockInfo", finmind.BASE, {"dataset": "TaiwanStockInfo"})
     if info is not None:
         st = finmind.undated_stats(info["data"])
-        v.check("run2：FinMind TaiwanStockInfo date 為 null 的列", None,
-                f"null 列 {st['null_rows']}；僅有 null 列的代號 {len(st['stock_ids_only_null'])} 檔 {st['stock_ids_only_null'][:30]}；"
-                f"樣本 {json.dumps(st['samples'], ensure_ascii=False)[:1500]}")
+        v.check("run3：FinMind TaiwanStockInfo 無日期列（D1）", None,
+                f"無日期列 {st['undated_rows']}（原始值分佈 {st['undated_raw_values']}）；"
+                f"僅有無日期列的代號 {len(st['stock_ids_only_undated'])} 檔 {st['stock_ids_only_undated'][:40]}；"
+                f"其 type 分佈 {st['only_undated_by_type']}；其類別分佈 {st['only_undated_by_category']}；"
+                f"其他非 ISO 日期列 {st['invalid_date_rows']} {json.dumps(st['invalid_samples'], ensure_ascii=False)[:500]}；"
+                f"樣本 {json.dumps(st['undated_samples'], ensure_ascii=False)[:1200]}")
         recs = v.parse_check("FinMind TaiwanStockInfo", lambda: finmind.latest_info_by_stock(
             finmind.require_keys(info["data"], "TaiwanStockInfo", finmind.STOCK_INFO_KEYS)), lambda r: f"{len(r)} 檔（取最新 date 後）")
         if recs:
@@ -311,6 +314,17 @@ def run(v: Verifier, sample: date, window_end: date) -> None:
     if tdays is not None and isinstance(tdays.get("data"), list):
         weekend = [r.get("date") for r in tdays["data"] if _is_weekend(r.get("date"))]
         v.check("週末無交易日（不請求週末之依據）", not weekend, f"2024-01-01 起 {len(tdays['data'])} 個交易日，週末交易日 {weekend[:10]}")
+
+    # ---- run3：FinMind TaiwanStockTradingDate 是否提供未來交易日（D4）
+    fut = v.probe("run3：FinMind TaiwanStockTradingDate（未來 60 天）", finmind.BASE,
+                  {"dataset": "TaiwanStockTradingDate", "start_date": sample.isoformat(),
+                   "end_date": (sample + timedelta(days=60)).isoformat()})
+    if isinstance(fut, dict) and isinstance(fut.get("data"), list):
+        from src.timezone import today_taipei
+        dates = [str(r.get("date")) for r in fut["data"]]
+        future = [d for d in dates if d > today_taipei().isoformat()]
+        v.check("run3：FinMind 交易日表含今日之後的日期（D4）", bool(future) or None,
+                f"回傳 {len(dates)} 筆；今日之後 {len(future)} 筆 {future[:30]}；全部 {dates[:60]}")
 
     # ---- run2：4763 面額變更往前回溯（規格例；run1 一年內未見）
     hits = []

@@ -307,7 +307,7 @@ def test_run1_observed_date_formats(raw, expected):
 
 def test_finmind_null_date_rows_provisional_rule():
     data = [
-        {"industry_category": "半導體業", "stock_id": "6488", "stock_name": "環球晶", "type": "tpex", "date": None},
+        {"industry_category": "半導體業", "stock_id": "6488", "stock_name": "環球晶", "type": "tpex", "date": "None"},
         {"industry_category": "半導體業", "stock_id": "6488", "stock_name": "環球晶", "type": "tpex", "date": "2024-06-01"},
         {"industry_category": "ETF", "stock_id": "00999A", "stock_name": "某ETF", "type": "twse", "date": None},
     ]
@@ -315,7 +315,21 @@ def test_finmind_null_date_rows_provisional_rule():
     assert latest["6488"]["_date"] == date(2024, 6, 1) and latest["6488"]["_date_unknown"] is False
     assert latest["00999A"]["_date"] is None and latest["00999A"]["_date_unknown"] is True
     stats = finmind.undated_stats(data)
-    assert stats["null_rows"] == 2 and stats["stock_ids_only_null"] == ["00999A"]
+    assert stats["undated_rows"] == 2 and stats["stock_ids_only_undated"] == ["00999A"]
+    assert stats["undated_raw_values"] == {"'None'": 1, "None": 1}
+    assert stats["only_undated_by_type"] == {"twse": 1} and stats["invalid_date_rows"] == 0
+
+
+def test_finmind_string_none_date_does_not_crash():
+    data = [{"industry_category": "ETF", "stock_id": "0050", "stock_name": "元大台灣50", "type": "twse", "date": "None"}]
+    assert finmind.latest_info_by_stock(data)["0050"]["_date_unknown"] is True
+
+
+def test_finmind_other_invalid_date_still_raises():
+    data = [{"industry_category": "ETF", "stock_id": "0050", "stock_name": "x", "type": "twse", "date": "2024/01/01"}]
+    with pytest.raises(ValueError):
+        finmind.latest_info_by_stock(data)
+    assert finmind.undated_stats(data)["invalid_date_rows"] == 1
 
 
 def test_finmind_non_200_status_raises():
