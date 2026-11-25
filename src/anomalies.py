@@ -1,13 +1,13 @@
-"""還原資料的稽核工具（供 M3-Q3「疑似未還原跳空異常」門檻裁定與還原檢驗；目前不輸出到名單警示）。
+"""還原資料的稽核：跳空異常警示與事件對帳。
 
-1. ``close_jumps``：逐檔相鄰兩個有效交易日的原始價比值（收盤／前收、開盤／前收），標註
-   - 兩日之間（不含前一日、含當日）是否有官方還原事件；
-   - 兩日之間隔了幾個「該市場有交易、但此檔無有效價」的交易日（停牌後恢復）；
-   - 當日是此檔在回溯期間的第幾個有效交易日（新上市初期）。
-   第 9 節規則為「單日收盤跳空跌幅 > 35% 或漲幅 > 50% 卻查無對應事件紀錄」；第 3.3 節另寫「單日跌幅 > 40%」。
-2. ``reconcile_events``：事件對帳。每筆事件的 P_before（除權息前收盤價／停止買賣前收盤價格／
-   最後交易日之收盤價格）應等於該檔事件日前最後一個有效交易日的原始收盤價。
-   相符即代表事件與行情對得上、還原因子 P_ref／P_before 套在正確的日子；不需「還原後漲跌 ≤ 10%」這類推定門檻。
+1. 「疑似未還原跳空異常」（2026-11-25 裁定 M4-Q1＝A，依第 9 節；第 3.3 節「跌幅 > 40%」不採用）：
+   相鄰兩個有效交易日的**原始收盤價**比值 < 0.65（跌幅 > 35%）或 > 1.5（漲幅 > 50%），
+   且兩日之間（不含前一日、含當日）查無該代號任何官方還原事件 → 在 warnings 標註
+   「疑似未還原跳空異常，請人工看圖複核」。掃描範圍為本次抓取的整段回溯期間；停牌後恢復、新上市初期不另排除。
+   ``close_jumps`` 另附開盤比、停牌日數、第幾個有效日等欄位，僅供試跑報告分析。
+2. 事件對帳（2026-11-25 裁定 M4-Q1b，取代 M3 的「還原後漲跌 ≤ 10%」推定門檻）：
+   每筆事件的 P_before（除權息前收盤價／停止買賣前收盤價格／最後交易日之收盤價格）應等於該檔
+   事件日前最後一個有效交易日的原始收盤價，容差 0.005 元。用於 verify-api 與全量試跑的驗收核對。
 """
 
 from __future__ import annotations
@@ -20,7 +20,10 @@ import pandas as pd
 
 from src.fetchers.parsing import CorporateEvent
 
-PRICE_TOLERANCE = 0.005      # 官方價格至小數 2 位
+PRICE_TOLERANCE = 0.005      # 官方價格至小數 2 位（M4-Q1b）
+JUMP_DROP = 0.35             # 單日收盤跌幅 > 35%（M4-Q1）
+JUMP_RISE = 0.50             # 單日收盤漲幅 > 50%（M4-Q1）
+NOTE_UNADJUSTED_JUMP = "疑似未還原跳空異常，請人工看圖複核"   # 第 9 節原文
 
 
 def _valid(daily: pd.DataFrame) -> pd.DataFrame:
@@ -60,6 +63,16 @@ def close_jumps(daily: pd.DataFrame, events: Iterable[CorporateEvent], min_move:
     cols = ["code", "name", "market", "date", "prev_date", "prev_close", "open", "close", "close_ratio", "open_ratio",
             "has_event", "halted_trading_days", "nth_valid_day"]
     return hit[cols].reset_index(drop=True)
+
+
+def unadjusted_jumps(daily: pd.DataFrame, events: Iterable[CorporateEvent]) -> dict[str, list[date]]:
+    """{代號: [觸發日…]}：收盤比 < 1 − 35% 或 > 1 + 50%，且兩日之間查無官方事件（見模組說明）。"""
+    j = close_jumps(daily, events, min_move=min(JUMP_DROP, JUMP_RISE))
+    hit = j[((j["close_ratio"] < 1 - JUMP_DROP) | (j["close_ratio"] > 1 + JUMP_RISE)) & ~j["has_event"]]
+    out: dict[str, list[date]] = {}
+    for r in hit.sort_values(["code", "date"]).itertuples():
+        out.setdefault(r.code, []).append(r.date)
+    return out
 
 
 def reconcile_events(daily: pd.DataFrame, events: Iterable[CorporateEvent], start: date, end: date) -> pd.DataFrame:

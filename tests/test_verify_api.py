@@ -80,7 +80,8 @@ def test_verify_run_and_render(tmp_path):
     assert "驗證腳本未預期錯誤" not in items, items.get("驗證腳本未預期錯誤")
     m3 = [k for k in items if k.startswith("M3：")]
     assert any("短週週 K 結算" in k for k in m3) and any("D4 週結算" in k for k in m3)
-    assert any("W20MA 與 D100MA" in k for k in m3) and any("還原連續性" in k for k in m3)
+    assert any("W20MA 與 D100MA" in k for k in m3) and any("事件對帳" in k for k in m3)
+    assert sum(k.startswith("M4b：") for k in items) == 5
     assert items["M3：2330 短週週 K 結算"][0] == "通過"
     assert "M3：一年內還原事件衝突（同日多筆／防呆未過）" in items
     assert "TPEx「管理股票」表（D3：解析並標記）" in items

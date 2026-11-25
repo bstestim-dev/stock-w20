@@ -298,3 +298,27 @@ def test_alert_codes_rules_and_bad_rows():
     inp.twse_notice = None
     _d, _n, notes = alert_codes(inp, AS_OF)
     assert any("注意資料不可用" in n for n in notes)
+
+
+def _halve_from(inp, code, day):
+    m = (inp.daily["code"] == code) & (inp.daily["date"] >= day)
+    for col in ("open", "high", "low", "close"):
+        inp.daily.loc[m, col] = inp.daily.loc[m, col] * 0.5
+    return inp
+
+
+def test_unadjusted_jump_warning():
+    """M4-Q1：收盤跌 > 35% 且查無事件 → warnings 標註第 9 節原文；有官方事件則不標。"""
+    day = MON0 + timedelta(weeks=10, days=2)
+    res = screen(_halve_from(make_inputs(), "2002", day), CFG)
+    row = res["_all_rows"]["2002"]
+    assert "疑似未還原跳空異常，請人工看圖複核" in row["warnings"] and row["unadjusted_jump_dates"] == [day]
+    assert res["_all_rows"]["2330"]["unadjusted_jump_dates"] == []
+
+    from src.fetchers.parsing import CorporateEvent
+    inp = _halve_from(make_inputs(), "2002", day)
+    prev_close = float(inp.daily[(inp.daily["code"] == "2002") & (inp.daily["date"] == day - timedelta(days=1))]["close"].iloc[0])
+    inp.events = [CorporateEvent("twse", "2002", "中鋼", day, "par_value_change", prev_close, prev_close * 0.5, "t")]
+    row = screen(inp, CFG)["_all_rows"]["2002"]
+    assert "疑似未還原跳空異常，請人工看圖複核" not in row["warnings"] and row["unadjusted_jump_dates"] == []
+    assert "近45週曾減資/分割" in row["warnings"]

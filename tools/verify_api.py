@@ -400,6 +400,44 @@ def _stock_day_frame(v: Verifier, code: str, months: list[date], cache: dict) ->
     return df.drop_duplicates("date").sort_values("date").reset_index(drop=True) if not df.empty else df
 
 
+M4B_CASE = ("00775B", date(2025, 11, 20), (date(2025, 11, 18), date(2025, 11, 19), date(2025, 11, 20)))
+
+
+def _rows_for_code(payload: Any, code: str) -> list[tuple[str, list[Any]]]:
+    """回傳 payload 內所有表格中，第一欄等於 code 的原始列（不經解析器，保留 '--' 等原字串）。"""
+    out = []
+    if not isinstance(payload, dict):
+        return out
+    tables = payload.get("tables") or [{"title": payload.get("title"), "data": payload.get("data")}]
+    for t in tables:
+        for row in (t or {}).get("data") or []:
+            if row and (str(row[0]).strip() == code or (len(row) > 1 and str(row[1]).strip() == code)):
+                out.append((str((t or {}).get("title")), row))
+    return out
+
+
+def investigate_00775b(v: Verifier) -> None:
+    """M4 全量試跑唯一的事件對帳不符：00775B 2025-11-20 除息 P_before 32.59，試跑資料中前一有效收盤為
+    2025-11-18 的 32.61（2025-11-19 無有效價）。直接列出官方原始列以判斷原因（不經解析器）。"""
+    code, ev_day, days = M4B_CASE
+    sd = v.probe(f"M4b：STOCK_DAY {code} 2025-11", f"{twse.RWD}/afterTrading/STOCK_DAY",
+                 {"date": "20251101", "stockNo": code, "response": "json"})
+    rows = [r for r in (sd or {}).get("data") or [] if str(r[0]).strip() in ("114/11/17", "114/11/18", "114/11/19",
+                                                                              "114/11/20", "114/11/21")]
+    v.check(f"M4b：{code} STOCK_DAY 2025-11-17～21 原始列", None,
+            f"fields={(sd or {}).get('fields')}；rows={rows}；stat={(sd or {}).get('stat')}")
+    for d in days:
+        key = format_twse_query_date(d)
+        mi = v.probe(f"M4b：MI_INDEX {key}", f"{twse.RWD}/afterTrading/MI_INDEX",
+                     {"date": key, "type": "ALLBUT0999", "response": "json"})
+        v.check(f"M4b：{code} MI_INDEX {key} 原始列", None,
+                f"stat={(mi or {}).get('stat')}；{_rows_for_code(mi, code) or '查無此代號'}")
+    ev = v.probe(f"M4b：TWT49U {format_twse_query_date(ev_day)}", f"{twse.RWD}/exRight/TWT49U",
+                 {"startDate": format_twse_query_date(ev_day), "endDate": format_twse_query_date(ev_day), "response": "json"})
+    v.check(f"M4b：{code} TWT49U {ev_day} 原始列", None,
+            f"fields={(ev or {}).get('fields')}；{_rows_for_code(ev, code) or '查無此代號'}")
+
+
 def run_m3(v: Verifier, sample: date, window_end: date, window_res: Any, mi_sample: Any) -> None:
     from src.adjustments import AdjustmentPlan, apply_plan, build_plan
     from src.config import load_config
@@ -410,34 +448,37 @@ def run_m3(v: Verifier, sample: date, window_end: date, window_res: Any, mi_samp
     cfg, _ = load_config(env={})
     cache: dict = {}
 
-    # 0) 一年內兩市事件的衝突統計（同日多筆不同事件、價格未通過防呆）→ 供待裁定 Q1、Q2
+    # 0) 一年內兩市事件的衝突統計（同日多筆不同事件、價格未通過防呆；M3-Q1、Q2 已裁定列為衝突）
     plan_all = build_plan(v.twse_events + v.tpex_events, sample - timedelta(days=365), sample)
     v.check("M3：一年內還原事件衝突（同日多筆／防呆未過）", None,
             f"事件 TWSE {len(v.twse_events)}、TPEx {len(v.tpex_events)} 筆；有因子代號 {len(plan_all.factors)}；"
             f"衝突代號 {len(plan_all.conflicts)}：{json.dumps(plan_all.conflicts, ensure_ascii=False)[:1500]}")
 
-    # 1) 還原後事件前後連續（漲跌幅 10% 為推定上限，僅作判讀參考）
+    # 1) 事件對帳（M4-Q1b 裁定，取代 M3 的「還原後漲跌 ≤ 10%」推定門檻）：
+    #    P_before 須等於事件日前最後有效收盤（STOCK_DAY），容差 0.005 元；另列還原前後比值供參考
+    from src.anomalies import PRICE_TOLERANCE, reconcile_events
     for code in M3_SAMPLES:
         evs = sorted((e for e in v.twse_events if e.code == code), key=lambda e: e.event_date)
         if not evs:
-            v.check(f"M3：{code} 還原連續性", None, "一年內 TWSE 事件表查無此代號")
+            v.check(f"M3：{code} 事件對帳", None, "一年內 TWSE 事件表查無此代號")
             continue
         e = evs[-1]
         df = _stock_day_frame(v, code, [_prev_month(e.event_date), _month_start(e.event_date)], cache)
         if df.empty or e.event_date not in set(df["date"]):
-            v.check(f"M3：{code} 還原連續性", None, f"事件日 {e.event_date} 不在 STOCK_DAY 資料內")
+            v.check(f"M3：{code} 事件對帳", None, f"事件日 {e.event_date} 不在 STOCK_DAY 資料內")
             continue
+        rec = reconcile_events(df, [e], df["date"].min() - timedelta(days=1), df["date"].max()).iloc[0]
         plan = build_plan(evs, df["date"].min() - timedelta(days=1), df["date"].max())
         adj = apply_plan(df, plan)
         i = adj.index[adj["date"] == e.event_date][0]
-        if i == 0:
-            v.check(f"M3：{code} 還原連續性", None, "事件日為資料第一天，無前一交易日")
-            continue
-        raw = adj.loc[i, "close"] / adj.loc[i - 1, "close"]
-        a = adj.loc[i, "close_adj"] / adj.loc[i - 1, "close_adj"]
-        v.check(f"M3：{code} 還原連續性（{e.kind} {e.event_date}）", abs(a - 1) <= 0.10,
-                f"P_before={e.p_before} P_ref={e.p_ref}；前一日→事件日 原始比 {raw:.4f}、還原比 {a:.4f}；"
-                f"前一日 cum_factor {adj.loc[i - 1, 'cum_factor']:.6f}；衝突 {plan.conflicts.get(code)}")
+        ratio = "" if i == 0 else (f"；前一日→事件日 原始比 {adj.loc[i, 'close'] / adj.loc[i - 1, 'close']:.4f}、"
+                                   f"還原比 {adj.loc[i, 'close_adj'] / adj.loc[i - 1, 'close_adj']:.4f}")
+        v.check(f"M3：{code} 事件對帳（{e.kind} {e.event_date}）",
+                None if rec["status"] in ("no_prior_day", "code_not_in_data") else rec["status"] == "match",
+                f"P_before={e.p_before}；事件日前最後有效收盤 {rec['prev_date']} {rec['prev_close']}；差 {rec['diff']}"
+                f"（容差 {PRICE_TOLERANCE}）；P_ref={e.p_ref}{ratio}；衝突 {plan.conflicts.get(code)}")
+
+    investigate_00775b(v)
 
     # 2) close_raw 與公開收盤價一致（MI_INDEX 樣本日 vs STOCK_DAY）
     if mi_sample is not None and mi_sample.get("stat") == "OK":

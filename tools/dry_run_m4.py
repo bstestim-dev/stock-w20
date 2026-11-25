@@ -3,8 +3,8 @@
 用途：
 1. 以真實 60 週資料跑一次 ``collect_inputs`` → ``screen``，核對第 10.1 節第 3、4 項（分頁互斥、股本硬門檻、
    不含權證／ETN／特別股／DR、創新板納入、U2 設 0 可關閉、綠燈不過濾、出場標示）。
-2. 產出待裁定事項所需的實測統計：M3-Q3 跳空異常門檻、事件對帳（取代「還原後漲跌 ≤ 10%」推定門檻）、
-   M4-Q4 族群分組依據、M4-Q6 ETF 子類型重疊、M4-Q7 處置／注意公告日期分佈。
+2. 實測統計：跳空異常（M4-Q1 裁定：收盤跌 > 35% 或漲 > 50% 且無事件）、事件對帳（M4-Q1b 裁定）、
+   族群分組（M4-Q4）、ETF 子類型重疊（M4-Q6）、處置／注意公告日期分佈（M4-Q7）。
 
 執行：``python -m tools.dry_run_m4 --out dry_run_report [--as-of YYYY-MM-DD]``（約 30～60 分鐘，視 TPEx 回應而定）。
 """
@@ -218,7 +218,7 @@ def alerts_data(rep: Report, inp, res) -> None:
         if has_period:
             rep.p(f"  - 處置期間樣本：{[r.get('DispositionPeriod') for r in rows[:5]]}")
     flagged = {k: sorted(c for c, r in res["_all_rows"].items() if k in r["warnings"]) for k in ("處置股", "注意股", "管理股票")}
-    rep.p(f"- 依暫定規則（處置：公告日 ≤ 基準日 {as_of} ≤ 迄日；注意：公告日 = 基準日）標示：{flagged}")
+    rep.p(f"- 依 M4-Q7 裁定（處置：公告日 ≤ 基準日 {as_of} ≤ 迄日；注意：公告日 = 基準日）標示：{flagged}")
 
 
 def jump_data(rep: Report, inp, res) -> None:
@@ -231,7 +231,7 @@ def jump_data(rep: Report, inp, res) -> None:
           f"（有官方事件 {int(j['has_event'].sum())}、無事件 {int((~j['has_event']).sum())}）")
     rep.p()
     cands = {
-        "A｜第 9 節：收盤跌 > 35% 或漲 > 50%": (j["close_ratio"] < 0.65) | (j["close_ratio"] > 1.5),
+        "A｜第 9 節：收盤跌 > 35% 或漲 > 50%（M4-Q1 採用）": (j["close_ratio"] < 0.65) | (j["close_ratio"] > 1.5),
         "B｜第 3.3 節：收盤跌 > 40%": j["close_ratio"] < 0.60,
         "C｜開盤跌 > 35% 或漲 > 50%": (j["open_ratio"] < 0.65) | (j["open_ratio"] > 1.5),
         "D｜收盤跌 > 30% 或漲 > 30%": (j["close_ratio"] < 0.70) | (j["close_ratio"] > 1.30),
@@ -250,6 +250,9 @@ def jump_data(rep: Report, inp, res) -> None:
     rep.p("- 無事件且收盤或開盤變動 ≥ 30% 明細（最多 80 筆）：")
     rep.p()
     rep.table(list(ne.columns), ne.head(80).values.tolist())
+    flagged = sorted(c for c, r in res["_all_rows"].items() if r["unadjusted_jump_dates"])
+    rep.check("跳空異常警示（M4-Q1：收盤跌 > 35% 或漲 > 50% 且查無事件）", None,
+              f"標示 {len(flagged)} 檔：" + "；".join(f"{c} {res['_all_rows'][c]['unadjusted_jump_dates']}" for c in flagged))
     rep.data["jumps"] = j.to_dict(orient="records")
 
 
@@ -266,11 +269,19 @@ def reconcile_data(rep: Report, inp, res) -> None:
     rep.table(["市場／類型"] + list(piv.columns), [[f"{m}／{k}"] + list(v) for (m, k), v in piv.iterrows()])
     mm = r[r["status"] == "mismatch"]
     rep.p()
-    rep.p(f"- 不符 {len(mm)} 筆（最多 60 筆）：")
+    rep.p(f"- 不符 {len(mm)} 筆（最多 60 筆）；每筆附前一有效日至事件日之間的原始日 K（含無效日）：")
     rep.p()
     rep.table(list(mm.columns), mm.head(60).values.tolist())
+    for m in mm.head(20).itertuples():
+        raw = inp.daily[(inp.daily["code"] == m.code) & (inp.daily["date"] >= m.prev_date)
+                        & (inp.daily["date"] <= m.event_date)].sort_values("date")
+        rep.p()
+        rep.p(f"  - {m.code} {m.prev_date}～{m.event_date} 原始列：")
+        rep.p()
+        cols = ["date", "open", "high", "low", "close", "volume_shares"]
+        rep.table(cols, raw[cols].values.tolist())
     total = (r["status"].isin(["match", "mismatch"])).sum()
-    rep.check("事件對帳：P_before 等於事件日前最後有效收盤", None,
+    rep.check("事件對帳：P_before 等於事件日前最後有效收盤（M4-Q1b，容差 0.005）", len(mm) == 0,
               f"可比對 {int(total)} 筆，相符 {int((r['status'] == 'match').sum())}、不符 {len(mm)}；"
               f"無前一日 {int((r['status'] == 'no_prior_day').sum())}")
     rep.data["reconcile"] = r.to_dict(orient="records")

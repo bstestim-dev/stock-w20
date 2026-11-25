@@ -5,17 +5,16 @@
 → 出場與週中警戒 → S1～S6 評分（不硬剔除）。輸出為 Python 結構，欄位鍵名對齊第 6.3 節；
 序列化（latest.json／CSV）於 M5 實作。
 
-【暫定，待裁定】（見 docs/decisions.md「待裁定（尚未生效）」）：
+2026-11-25 裁定（docs/decisions.md「M4 裁定」）：
+- M4-Q1 「疑似未還原跳空異常，請人工看圖複核」：收盤跌 > 35% 或漲 > 50% 且查無事件（見 anomalies）。
 - M4-Q4 族群（S6）分組依官方產業別代碼（上市 ``產業別``、上櫃 ``SecuritiesIndustryCode`` 視為同一代碼表）。
-- M4-Q5 ETF 專頁收錄全部 ETF（第 4.1B 節「MUST 收錄全部上市櫃 ETF」），每檔以 ``etf_zone`` 標示
-  "new_cross"／"above_and_spike"／None 供前端分區或篩選（第 4.3B 節「或透過狀態篩選切換」）；
-  ``etf_signal_count`` 只計兩區內者。
+- M4-Q5 ETF 專頁收錄全部 ETF（第 4.1B 節），每檔以 ``etf_zone`` 標示
+  "new_cross"／"above_and_spike"／None 供前端分區或篩選；``etf_signal_count`` 只計兩區內者。
 - M4-Q7 處置股：公告日 ≤ 基準日 ≤ 處置期間迄日；注意股：公告日 = 基準日。
 - M4-Q8 乖離警示文字採第 4.3C 節「距週 20MA 較遠」；出場說明採 FR-1.7 與第 4.6 節文字。
-- M4-Q10 本週無週 K（全週停牌或缺週）者不給出場狀態（exit_status = None）；t-1 取前一根有效週 K。
 - M4-Q9 FinMind 斷線時 is_tib 一律 false（見 universe）。
+- M4-Q10 本週無週 K（全週停牌或缺週）者不給出場狀態（exit_status = None）；t-1 取前一根有效週 K。
 - M4-Q12 w20_slope_up 僅在 S2 得 15 分時為 true；同分依代號遞增。
-- M4-Q1（原 M3-Q3）第 9 節「疑似未還原跳空異常」門檻待裁定，本里程碑不輸出該警示（稽核工具見 anomalies）。
 """
 
 from __future__ import annotations
@@ -29,6 +28,7 @@ from typing import Any
 import pandas as pd
 
 from src.adjustments import apply_plan, build_plan, codes_with_share_structure_change
+from src.anomalies import NOTE_UNADJUSTED_JUMP, unadjusted_jumps
 from src.fetchers.parsing import CorporateEvent
 from src.indicators import compute_all, index_indicators
 from src.market import market_block
@@ -46,7 +46,7 @@ WARN_DISPOSITION = "處置股"
 WARN_NOTICE = "注意股"
 WARN_MANAGED = "管理股票"              # D3
 WARN_SHARE_STRUCTURE = "近45週曾減資/分割"   # 第 6.3 節範例；M3-Q4 45 週
-WARN_BIAS = "距週 20MA 較遠"            # 第 4.3C 節（M4-Q8 暫定）
+WARN_BIAS = "距週 20MA 較遠"            # 第 4.3C 節（M4-Q8）
 
 EXIT_NOTES = {
     "EXIT_CONFIRMED": "跌破週 20MA：建議下週一開盤賣",
@@ -179,6 +179,7 @@ def screen(inp: ScreenInputs, cfg: Mapping[str, Any], force_light: str | None = 
     adj = apply_plan(daily[daily["code"].isin(members)].reset_index(drop=True), plan)
     inds = compute_all(adj, week, cfg, plan.conflicts)
     share_change = codes_with_share_structure_change(plan, as_of)
+    jumps = unadjusted_jumps(daily[daily["code"].isin(members)], inp.events)
     disp, notice, alert_notes = alert_codes(inp, as_of)
     market = market_block(index_indicators(inp.index_daily, as_of, cfg), force_light=force_light)
 
@@ -229,6 +230,8 @@ def screen(inp: ScreenInputs, cfg: Mapping[str, Any], force_light: str | None = 
             warnings.append(WARN_SHARE_STRUCTURE)
         if ind.get("bias_20w_pct") is not None and ind["bias_20w_pct"] > bias_warn:
             warnings.append(WARN_BIAS)
+        if code in jumps:
+            warnings.append(NOTE_UNADJUSTED_JUMP)
         warnings += list(ind.get("notes", []))
         if pat:
             warnings += pat["notes"]
@@ -277,6 +280,7 @@ def screen(inp: ScreenInputs, cfg: Mapping[str, Any], force_light: str | None = 
             "exit_action_note": EXIT_NOTES.get(status) if status else None,
             "warnings": warnings,
             "has_share_split_or_reduction": code in share_change,
+            "unadjusted_jump_dates": list(jumps.get(code, [])),
             "adjustment_conflicts": list(ind.get("adjustment_conflicts", [])),
             "fundamentals_ref": None,           # M5 實作
             "_page": page_of(ind, spike_ratio),

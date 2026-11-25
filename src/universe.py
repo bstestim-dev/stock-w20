@@ -13,7 +13,8 @@ ETF（獨立分頁）：
 - FinMind 可用：最新列 ``industry_category`` 含 "ETF" 且 ``type`` 為 twse／tpex；
   不可用：當期行情中代號以 "00" 開頭、長度 4～6 碼者。
 - 子類型：末碼 L／R → leveraged_inverse；末碼 B 或名稱含「債」→ bond；末碼 A → active；其餘 equity_regular。
-  【暫定，待裁定 M4-Q6】同時符合多項時依上列順序取第一項。
+  同時符合多項時依上列順序取第一項（2026-11-25 裁定 M4-Q6；例：00680L 元大美債20正2 歸槓反）。
+- FinMind 不可用時 ``is_tib`` 一律 false 並於 notes 註明（M4-Q9）。
 """
 
 from __future__ import annotations

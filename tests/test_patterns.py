@@ -238,3 +238,31 @@ def test_reconcile_events():
           CorporateEvent("twse", "9999", "x", days[1], "dividend", 99, 98, "t")]
     r = reconcile_events(pd.DataFrame(rows), ev, date(2026, 1, 1), days[-1])
     assert r["status"].tolist() == ["match", "mismatch", "no_prior_day", "code_not_in_data"]
+
+
+# ---------------------------------------------------------------- M4-Q1 跳空異常
+
+def jump_frame(ratio, code="1111"):
+    days = [date(2026, 1, 5) + timedelta(days=i) for i in range(4)]
+    closes = [100.0, 100.0, 100.0 * ratio, 100.0 * ratio]
+    return days, pd.DataFrame([{"date": d, "code": code, "name": code, "market": "twse", "open": c, "high": c,
+                                "low": c, "close": c, "volume_shares": 1.0} for d, c in zip(days, closes)])
+
+
+@pytest.mark.parametrize("ratio, hit", [(0.65, False), (0.6499, True), (1.5, False), (1.5001, True),
+                                        (0.62, True), (1.45, False)])
+def test_unadjusted_jump_thresholds(ratio, hit):
+    from src.anomalies import unadjusted_jumps
+    days, df = jump_frame(ratio)
+    assert unadjusted_jumps(df, []) == ({"1111": [days[2]]} if hit else {})
+
+
+def test_unadjusted_jump_suppressed_only_by_event_between_days():
+    from src.anomalies import unadjusted_jumps
+    days, df = jump_frame(0.1)
+    ev_same = CorporateEvent("twse", "1111", "x", days[2], "par_value_change", 100, 10, "t")
+    ev_prev = CorporateEvent("twse", "1111", "x", days[1], "par_value_change", 100, 10, "t")
+    ev_other = CorporateEvent("twse", "2222", "x", days[2], "par_value_change", 100, 10, "t")
+    assert unadjusted_jumps(df, [ev_same]) == {}
+    assert unadjusted_jumps(df, [ev_prev]) == {"1111": [days[2]]}      # 事件在前一日（不在兩日之間）不算
+    assert unadjusted_jumps(df, [ev_other]) == {"1111": [days[2]]}
