@@ -82,9 +82,8 @@ def summarize(payload: Any) -> dict[str, Any]:
 
 
 class Verifier:
-    def __init__(self, client: HttpClient, out_dir: Path, client_factory: Callable[[], Any] = HttpClient):
+    def __init__(self, client: HttpClient, out_dir: Path):
         self.client = client
-        self.client_factory = client_factory  # 並行模式的第二個（TPEx 專用）client
         self.out = out_dir
         (self.out / "raw").mkdir(parents=True, exist_ok=True)
         self.results: list[dict[str, Any]] = []
@@ -234,8 +233,10 @@ def run(v: Verifier, sample: date, window_end: date) -> None:
             no_px = [(q.code, q.name, q.volume_shares) for q in m.quotes if q.close is None]
             v.check("run3：TPEx 無收盤價列（含 '---'）成交股數皆不足 1,000 股（D2）", all((x[2] or 0) < 1000 for x in no_px),
                     f"{len(no_px)} 檔：{no_px[:20]}")
-            mgmt = next((t for t in extract_tables(dq[sample]) if t.get("title") == "管理股票"), None)
-            v.check("run2：TPEx dailyQuotes「管理股票」表列數", None, f"{len(mgmt.get('data') or []) if mgmt else '無此表'}")
+            mgmt = next((t for t in extract_tables(dq[sample]) if t.get("title") == tpex.MANAGED_TABLE_TITLE), None)
+            managed = [q.code for q in m.quotes if q.managed]
+            v.check("TPEx「管理股票」表（D3：解析並標記）", None,
+                    f"原始列數 {len(mgmt.get('data') or []) if mgmt else '無此表'}；預篩後標記 managed 的代號 {managed[:30]}")
         except Exception as exc:
             v.check("run2：TPEx 無收盤價列", False, f"{type(exc).__name__}: {exc}"[:300])
 
@@ -336,13 +337,13 @@ def run(v: Verifier, sample: date, window_end: date) -> None:
     v.check("run2：TWTB8U 2023-01-01 起是否含 4763", bool(hits) or None,
             str([(h.event_date.isoformat(), h.p_before, h.p_ref) for h in hits]) or "2023 年以來查無")
 
-    # ---- 短窗歷史流程實測（含非交易日判定）：逐日依序 vs 分主機並行
-    def timed(label, end_d, **kw):
-        clients = [v.client] + ([kw["tpex_client"]] if kw.get("tpex_client") else [])
+    # ---- 短窗歷史流程實測（含非交易日判定）
+    def timed(label, end_d):
+        clients = [v.client]
         marks = [len(c.logs) for c in clients]
         t0 = time.monotonic()
         try:
-            res = history.fetch_daily_history(v.client, end_d, lookback_weeks=3, **kw)
+            res = history.fetch_daily_history(v.client, end_d, lookback_weeks=3)
             lines = [f"{d.trade_date}({'一二三四五'[d.trade_date.weekday()]})={d.status}" for d in res.days]
             v.check(label, True, f"as_of={res.as_of_date}；缺漏={res.missing}；notes={res.notes}；" + "、".join(lines))
         except Exception as exc:
@@ -357,11 +358,8 @@ def run(v: Verifier, sample: date, window_end: date) -> None:
         return wall, days, per
 
     w1, n1, per1 = timed("短窗歷史流程（fetch_daily_history）", window_end)
-    w2, n2, per2 = timed("run2：短窗歷史流程（分主機並行）", window_end - timedelta(days=21),
-                         parallel_hosts=True, tpex_client=v.client_factory())
     fmt = lambda per: "；".join(f"{h} {n} 次平均 {a:.2f} 秒" for h, (n, a) in per.items())
     v.check("耗時估算（逐日依序）", None, f"{n1} 個平日實耗 {w1:.0f} 秒（{fmt(per1)}）；300 個平日 ≈ {w1 / n1 * 300 / 60:.1f} 分鐘")
-    v.check("run2：耗時估算（分主機並行）", None, f"{n2} 個平日實耗 {w2:.0f} 秒（{fmt(per2)}）；300 個平日 ≈ {w2 / n2 * 300 / 60:.1f} 分鐘")
 
 
 # ---- 解析輔助（重用正式解析器，避免重複請求）

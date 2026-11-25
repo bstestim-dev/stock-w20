@@ -141,25 +141,22 @@ def test_history_to_frames(monkeypatch):
     assert list(idx["close"].unique()) == [23000.0] and len(idx) == 5
 
 
-def test_parallel_hosts_gives_same_result_and_needs_separate_client(monkeypatch):
-    install(monkeypatch, normal, normal)
-    seq = history.fetch_daily_history(None, date(2026, 10, 16), lookback_weeks=2, today=TODAY)
 
-    class C:  # 兩個不同物件即可（fetch 已被 monkeypatch）
-        pass
-
-    a, b = C(), C()
-    par = history.fetch_daily_history(a, date(2026, 10, 16), lookback_weeks=2, today=TODAY,
-                                      parallel_hosts=True, tpex_client=b)
-    assert [(d.trade_date, d.status) for d in par.days] == [(d.trade_date, d.status) for d in seq.days]
-    with pytest.raises(ValueError, match="tpex_client"):
-        history.fetch_daily_history(a, date(2026, 10, 16), lookback_weeks=2, today=TODAY, parallel_hosts=True)
+def test_cache_backward_compatible_without_managed_field(tmp_path):
+    import gzip, json
+    old = {"market": "tpex", "trade_date": "2026-11-02", "is_trading": True, "index_close": None,
+           "quotes": [{"market": "tpex", "code": "6488", "name": "x", "open": 1.0, "high": 1.0, "low": 1.0,
+                       "close": 1.0, "volume_shares": 1.0, "value_ntd": 1.0}]}
+    tw = {**old, "market": "twse", "index_close": 1.0}
+    (tmp_path / "2026-11-02.json.gz").write_bytes(gzip.compress(json.dumps({"twse": tw, "tpex": old}).encode()))
+    r = history.DayCache(tmp_path).get(date(2026, 11, 2))
+    assert r is not None and r.tpex.quotes[0].managed is False
 
 
-def test_parallel_hosts_uses_each_client_for_its_host(monkeypatch):
-    seen = []
-    monkeypatch.setattr(twse, "fetch_mi_index", lambda c, d: seen.append(("twse", c)) or market("twse", d))
-    monkeypatch.setattr(tpex, "fetch_daily_quotes", lambda c, d: seen.append(("tpex", c)) or market("tpex", d))
-    history.fetch_daily_history("A", date(2026, 11, 20), lookback_weeks=1, today=TODAY,
-                                parallel_hosts=True, tpex_client="B")
-    assert {c for m, c in seen if m == "twse"} == {"A"} and {c for m, c in seen if m == "tpex"} == {"B"}
+def test_managed_flag_survives_cache_roundtrip(tmp_path):
+    d = date(2026, 11, 2)
+    q = DailyQuote("tpex", "5555", "x", 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, managed=True)
+    r = history.DayResult(d, market("twse", d), DailyMarket("tpex", d, True, [q]))
+    cache = history.DayCache(tmp_path)
+    assert cache.put(r, TODAY)
+    assert cache.get(d).tpex.quotes[0].managed is True

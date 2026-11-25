@@ -67,7 +67,7 @@ class RouteClient:
 
 
 def test_verify_run_and_render(tmp_path):
-    v = verify_api.Verifier(RouteClient(), tmp_path, client_factory=RouteClient)
+    v = verify_api.Verifier(RouteClient(), tmp_path)
     verify_api.run(v, date(2026, 11, 20), date(2026, 10, 9))
     report = verify_api.render(v, date(2026, 11, 20), date(2026, 10, 9))
     assert "# M2 API 實測報告" in report
@@ -78,7 +78,7 @@ def test_verify_run_and_render(tmp_path):
     assert items["短窗歷史流程（fetch_daily_history）"][0] == "通過"
     assert "2026-10-09(五)=non_trading" in items["短窗歷史流程（fetch_daily_history）"][1]
     assert "驗證腳本未預期錯誤" not in items
-    assert items["run2：短窗歷史流程（分主機並行）"][0] == "通過"
+    assert "TPEx「管理股票」表（D3：解析並標記）" in items
     assert items["解析器：TPEx parse_insti_net（取「三大法人買賣超股數合計」）"][0] == "通過"
     assert items["解析器：TPEx 櫃買指數 fetch_otc_index_month"][0] == "通過"
     assert items["run2：法人欄位關係（第3+4+7組買賣超＝合計，僅佐證不用於取值）"][0] == "通過"

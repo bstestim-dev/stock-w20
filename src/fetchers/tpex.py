@@ -4,7 +4,8 @@
 - 三大法人 ``/insti/dailyTrade``：24 欄中「買進股數／賣出股數／買賣超股數」各重複 7 次，不依位置猜測；
   只取名稱唯一的「三大法人買賣超股數合計」（單位：股）。
 - 櫃買指數 ``/indexInfo/inx``：fields 為 日期、開市、最高、最低、收市、漲/跌；日期為西元 ``YYYY/MM/DD``。
-- dailyQuotes 另有第二張表「管理股票」（run1 兩個樣本日皆 0 列）；是否併入待 Hector 裁定，目前只讀第一張表。
+- dailyQuotes 另有第二張表「管理股票」（run1～run3 樣本日皆 0 列，欄位與第一張表相同）；
+  依 2026-11-25 D3 裁定一併解析，標記 ``managed=True``，供網頁顯示「管理股票」警示徽章，不硬排除。
 - 上櫃變更股票面額專用端點：規格標「待確認」，依備援方式（跳空異常警示）處理，不另尋端點。
 """
 
@@ -38,6 +39,7 @@ OPENAPI = "https://www.tpex.org.tw/openapi/v1"
 WWW = "https://www.tpex.org.tw/www/zh-tw"
 
 DAILY_QUOTE_FIELDS = ("代號", "名稱", "收盤", "開盤", "最高", "最低", "成交股數", "成交金額(元)")
+MANAGED_TABLE_TITLE = "管理股票"
 
 
 # ---------------------------------------------------------------- 共用
@@ -69,15 +71,9 @@ def _openapi(client: HttpClient, path: str, required: tuple[str, ...]) -> list[d
 
 # ---------------------------------------------------------------- 主歷史來源：dailyQuotes
 
-def parse_daily_quotes(payload: dict[str, Any], trade_date: date, prefilter: bool = True) -> DailyMarket:
-    endpoint = "TPEx dailyQuotes"
-    _check_ok(payload, endpoint)
-    check_response_date(payload, endpoint, trade_date)  # run1：交易日與非交易日皆回傳 date
-    if _first_table_is_empty(payload):  # 規格：非交易日 tables[0].data == []
-        return DailyMarket("tpex", trade_date, is_trading=False)
-    report = ParseReport()
+def _quote_rows(table: dict[str, Any], endpoint: str, report: ParseReport, prefilter: bool, managed: bool) -> list[DailyQuote]:
     quotes = []
-    for r in table_rows(find_table(payload, endpoint), endpoint, DAILY_QUOTE_FIELDS):
+    for r in table_rows(table, endpoint, DAILY_QUOTE_FIELDS):
         code = str(r["代號"]).strip()
         if prefilter and not code_prefilter(code):  # 含權證約 1.2～1.4 萬筆，載入後立即過濾
             continue
@@ -89,7 +85,30 @@ def parse_daily_quotes(payload: dict[str, Any], trade_date: date, prefilter: boo
             close=parse_number_logged(r["收盤"], report, code, "收盤"),
             volume_shares=parse_number_logged(r["成交股數"], report, code, "成交股數"),
             value_ntd=parse_number_logged(r["成交金額(元)"], report, code, "成交金額(元)"),
+            managed=managed,
         ))
+    return quotes
+
+
+def parse_daily_quotes(payload: dict[str, Any], trade_date: date, prefilter: bool = True) -> DailyMarket:
+    endpoint = "TPEx dailyQuotes"
+    _check_ok(payload, endpoint)
+    check_response_date(payload, endpoint, trade_date)  # run1：交易日與非交易日皆回傳 date
+    if _first_table_is_empty(payload):  # 規格：非交易日 tables[0].data == []
+        return DailyMarket("tpex", trade_date, is_trading=False)
+    report = ParseReport()
+    tables = extract_tables(payload)
+    quotes = _quote_rows(dict(tables[0]), endpoint, report, prefilter, managed=False)
+    # D3：第二張表「管理股票」（以標題比對，不依位置；表不存在或為空則略過）
+    managed_tables = [t for t in tables[1:] if str(t.get("title", "")).strip() == MANAGED_TABLE_TITLE]
+    if len(managed_tables) > 1:
+        raise SchemaMismatch(endpoint, f"標題「{MANAGED_TABLE_TITLE}」的表格不只一張", [t.get("title") for t in tables])
+    if managed_tables and (managed_tables[0].get("data") or []):
+        managed = _quote_rows(dict(managed_tables[0]), f"{endpoint}／{MANAGED_TABLE_TITLE}", report, prefilter, managed=True)
+        dup = {q.code for q in quotes} & {q.code for q in managed}
+        if dup:
+            raise SchemaMismatch(endpoint, f"同一代號同時出現在一般與「{MANAGED_TABLE_TITLE}」表", sorted(dup)[:20])
+        quotes.extend(managed)
     return DailyMarket("tpex", trade_date, True, quotes, None, report)
 
 

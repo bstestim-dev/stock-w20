@@ -8,8 +8,8 @@
 - 缺漏連續超過 3 個平日，或缺漏比例 > 5%，拋 ``HistoryIncomplete``（workflow 以非 0 結束，不發佈錯誤報告）。
 - 週末不請求（台股週末不開市）；2026-11-25 verify-api run1 以 FinMind TaiwanStockTradingDate
   交叉檢查 2024-01-01 起 698 個交易日，無週末交易日。
-- ``parallel_hosts=True``（預設關閉，待 Hector 依 run2 耗時裁定）：TWSE 與 TPEx 各用一個執行緒與各自的
-  HttpClient，各主機仍維持自己的請求間隔與退避；不會對同一主機同時發出兩個請求。
+- 逐日依序抓取。分主機並行模式經 run2／run3 實測未見加速，依 2026-11-25 D5 裁定移除；
+  耗時改由 M6 的 actions/cache 保留本模組 DayCache 解決。
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from __future__ import annotations
 import gzip
 import json
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
@@ -185,8 +184,6 @@ def fetch_daily_history(
     cache: DayCache | None = None,
     today: date | None = None,
     progress: Callable[[DayResult], None] | None = None,
-    parallel_hosts: bool = False,
-    tpex_client: HttpClient | None = None,
 ) -> HistoryResult:
     today = today or today_taipei()
     end = min(end, today)
@@ -196,18 +193,7 @@ def fetch_daily_history(
     cached = {d: r for d in weekdays if cache and (r := cache.get(d)) is not None}
     todo = [d for d in weekdays if d not in cached]
 
-    fetched: dict[date, DayResult] = {}
-    if parallel_hosts and todo:
-        if tpex_client is None or tpex_client is client:
-            raise ValueError("parallel_hosts=True 時須另給 tpex_client（各主機獨立節流）")
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            tw_future = pool.submit(lambda: [_fetch_one("TWSE", client, d) for d in todo])
-            tp_future = pool.submit(lambda: [_fetch_one("TPEx", tpex_client, d) for d in todo])
-            for d, tw, tp in zip(todo, tw_future.result(), tp_future.result()):
-                fetched[d] = _combine(d, tw, tp)
-    else:
-        for d in todo:
-            fetched[d] = fetch_day(client, d)
+    fetched: dict[date, DayResult] = {d: fetch_day(client, d) for d in todo}
 
     days: list[DayResult] = []
     for d in weekdays:

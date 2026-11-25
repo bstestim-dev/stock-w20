@@ -336,3 +336,48 @@ def test_finmind_non_200_status_raises():
     c = StubClient({"finmindtrade": {"msg": "Your level is free", "status": 400, "data": []}})
     with pytest.raises(SchemaMismatch, match="status=400"):
         finmind.FinMindClient(c).fetch_dataset("TaiwanStockPriceAdj")
+
+
+# ---------- 2026-11-25 D3：管理股票表
+
+def _with_managed(rows, title="管理股票"):
+    p = F.daily_quotes_payload()
+    p["tables"].append({"title": title, "fields": list(F.DAILY_QUOTES_FIELDS), "data": rows})
+    return p
+
+
+def test_managed_table_rows_parsed_and_flagged():
+    p = _with_managed([F.dq_row("5555", "某管理股", "10.00", "10.00", "10.50", "9.80", "12,000", "120,000"),
+                       F.dq_row("712345", "某權證", "1.00", "1.00", "1.00", "1.00", "1,000", "1,000")])
+    m = tpex.parse_daily_quotes(p, D)
+    managed = [q for q in m.quotes if q.managed]
+    assert [(q.code, q.close, q.volume_shares) for q in managed] == [("5555", 10.0, 12_000)]   # 權證仍被預篩
+    assert all(not q.managed for q in m.quotes if q.code != "5555")
+
+
+def test_empty_managed_table_is_ignored_like_run1_to_run3():
+    m = tpex.parse_daily_quotes(_with_managed([]), D)
+    assert len(m.quotes) == 3 and not any(q.managed for q in m.quotes)
+
+
+def test_managed_table_missing_is_fine():
+    assert len(tpex.parse_daily_quotes(F.daily_quotes_payload(), D).quotes) == 3
+
+
+def test_code_in_both_tables_raises():
+    p = _with_managed([F.dq_row("6488", "環球晶", "400.00", "395.00", "405.00", "390.00", "1,000", "1,000")])
+    with pytest.raises(SchemaMismatch, match="同時出現"):
+        tpex.parse_daily_quotes(p, D)
+
+
+def test_managed_table_schema_change_raises():
+    p = _with_managed([["5555", "某管理股"]])
+    p["tables"][-1]["fields"] = ["代號", "名稱"]
+    with pytest.raises(SchemaMismatch, match="管理股票"):
+        tpex.parse_daily_quotes(p, D)
+
+
+def test_non_trading_day_with_empty_managed_table():
+    nd = copy.deepcopy(F.TPEX_NO_DATA)
+    nd["tables"].append({"title": "管理股票", "fields": list(F.DAILY_QUOTES_FIELDS), "data": []})
+    assert tpex.parse_daily_quotes(nd, D).is_trading is False

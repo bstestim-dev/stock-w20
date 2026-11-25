@@ -41,7 +41,7 @@ pytest
 | 里程碑 | 內容 | 狀態 |
 | :--- | :--- | :--- |
 | M1 | 專案骨架、設定檔、時區與民國年工具 | 完成 |
-| M2 | TWSE／TPEx／FinMind 抓取器 | 程式完成，待 API 實測（verify-api workflow） |
+| M2 | TWSE／TPEx／FinMind 抓取器 | 完成（verify-api run1～run3；見 docs/api-verification.md） |
 | M3 | 還原價、真正週 K、指標 | 未開始 |
 | M4 | 選股引擎 | 未開始 |
 | M5 | 輸出與靜態網頁 | 未開始 |

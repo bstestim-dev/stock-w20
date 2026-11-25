@@ -196,6 +196,7 @@ class DailyQuote:
     close: float | None
     volume_shares: float | None   # 成交股數（股）
     value_ntd: float | None       # 成交金額（元）
+    managed: bool = False         # TPEx「管理股票」表（2026-11-25 D3：解析並標記，不硬排除）
 
 
 @dataclass
