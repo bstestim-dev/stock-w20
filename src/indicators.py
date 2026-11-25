@@ -13,6 +13,9 @@
 - 前 20 週均量：不含本週之前 ``vol_lookback_weeks`` 根；不足 20 根時以實際可用（至少 4 根）計算並標註
   （第 9 節，門檻依 Q1 裁定為 21 根週 K）。
 - D20MA／D100MA：最近 20／100 個有效交易日 close_adj 平均（D100MA 僅作對照欄）。
+- S5「日 20MA 上穿週 20MA」所需的穿越判定（``d20_cross_w20``）亦於此計算（2026-11-25 Q5 裁定）：
+  僅計本週實際發生之穿越；本週每個有效日 d 以「暫定 W20MA＝(前 19 根週 K 收盤＋當日 close_adj)／20」比較，
+  上週最後有效日以 W20MA[t-1] 比較；相鄰兩點由 D20MA < W 轉為 D20MA >= W 即為穿越。
 """
 
 from __future__ import annotations
@@ -156,18 +159,21 @@ def stock_indicators(df_code: pd.DataFrame, week: WeekStatus, cfg: Mapping[str, 
         "d20ma": None, "d100ma": None, "ma_diff": None, "bias_20w_pct": None,
         "vol_week_lots": None, "vol_prev_week_lots": None, "vol_avg_20w_lots": None, "vol_avg_sample_weeks": 0,
         "vol_ratio_20w": None, "vol_ratio_20w_projected": None, "vol_ratio_prev_week": None,
-        "is_volume_spike": False,
+        "is_volume_spike": False, "d20_cross_w20": False,
+        "_series": None,
     }
     if d.empty:
         return res
 
     valid = d[d["_valid"]] if "_valid" in d else d[valid_day_mask(d)]
+    d20_series = None
     if not valid.empty:
         lv = valid.iloc[-1]
         res.update(last_trade_date=lv["date"], close_raw=_f(lv["close"]), close_adj=_f(lv["close_adj"]))
         closes = valid["close_adj"].astype("float64")
         if len(closes) >= D_SHORT:
             res["d20ma"] = float(closes.iloc[-D_SHORT:].mean())
+            d20_series = pd.Series(closes.rolling(D_SHORT).mean().to_numpy(), index=valid["date"].to_numpy())
         if len(closes) >= D_LONG:
             res["d100ma"] = float(closes.iloc[-D_LONG:].mean())
 
@@ -184,6 +190,7 @@ def stock_indicators(df_code: pd.DataFrame, week: WeekStatus, cfg: Mapping[str, 
     if bars.empty:
         return res
     s = add_weekly_series(bars, ma_weeks, vol_lookback)
+    res["_series"] = s
     cur, prev = s.iloc[-1], (s.iloc[-2] if len(s) >= 2 else None)
     res["has_current_week_bar"] = cur["week_monday"] == week.week_monday
     res["close_w"] = _f(cur["close"])
@@ -208,11 +215,32 @@ def stock_indicators(df_code: pd.DataFrame, week: WeekStatus, cfg: Mapping[str, 
         projected = res["vol_week_lots"] * PROJECTION_DAYS / week.trading_days_elapsed
         res["vol_ratio_20w_projected"] = _div(projected, res["vol_avg_20w_lots"])
 
+    res["d20_cross_w20"] = _d20_cross_w20(s, valid, d20_series, ma_weeks) if res["has_current_week_bar"] else False
+
     if res["w20ma"] is not None and res["close_raw"] is not None:
         res["ma_diff"] = res["close_raw"] - res["w20ma"]                         # 第 4.3C 節：原始收盤 − W20MA
     if res["w20ma"] is not None and res["close_adj"] is not None:
         res["bias_20w_pct"] = (res["close_adj"] - res["w20ma"]) / res["w20ma"] * 100
     return res
+
+
+def _d20_cross_w20(s: pd.DataFrame, valid: pd.DataFrame, d20: pd.Series | None, ma_weeks: int) -> bool:
+    """本週是否發生 D20MA 由下往上穿越（暫定）W20MA（見模組說明）。"""
+    if d20 is None or len(s) < ma_weeks + 1 or np.isnan(s["w20ma"].iloc[-2]):
+        return False
+    cur_monday = s["week_monday"].iloc[-1]
+    prior19 = float(s["close"].iloc[-ma_weeks:-1].sum())
+    points: list[tuple[float, float]] = []
+    prev_end = s["week_end_date"].iloc[-2]
+    if prev_end in d20.index:
+        points.append((float(d20.loc[prev_end]), float(s["w20ma"].iloc[-2])))
+    wk = valid[[week_monday(x) == cur_monday for x in valid["date"]]]
+    for day, close in zip(wk["date"], wk["close_adj"].astype("float64")):
+        points.append((float(d20.loc[day]), (prior19 + float(close)) / ma_weeks))
+    for (a_d, a_w), (b_d, b_w) in zip(points, points[1:]):
+        if not (np.isnan(a_d) or np.isnan(b_d)) and a_d < a_w and b_d >= b_w:
+            return True
+    return False
 
 
 def compute_all(adj_daily: pd.DataFrame, week: WeekStatus, cfg: Mapping[str, Any],

@@ -104,6 +104,39 @@ def undated_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def latest_rows_by_stock(records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """同一 stock_id 取「最新 date 的所有列」（同日可能多列、類別不同；M4 分類與族群用）。
+
+    無日期列規則同 ``latest_info_by_stock``（D1）：僅在該代號沒有任何具日期列時採用。
+    """
+    dated: dict[str, tuple[date, list[dict[str, Any]]]] = {}
+    undated: dict[str, list[dict[str, Any]]] = {}
+    for rec in records:
+        sid = str(rec["stock_id"]).strip()
+        raw = rec.get("date")
+        if is_undated(raw):
+            undated.setdefault(sid, []).append({**rec, "_date": None, "_date_unknown": True})
+            continue
+        d = parse_iso_date(str(raw))
+        row = {**rec, "_date": d, "_date_unknown": False}
+        cur = dated.get(sid)
+        if cur is None or d > cur[0]:
+            dated[sid] = (d, [row])
+        elif d == cur[0]:
+            cur[1].append(row)
+    out = {k: v for k, v in undated.items() if k not in dated}
+    out.update({k: v[1] for k, v in dated.items()})
+    return out
+
+
+def try_fetch_stock_info_rows(client: FinMindClient) -> tuple[dict[str, list[dict[str, Any]]] | None, str | None]:
+    """同 ``try_fetch_stock_info``，但保留最新日期的所有列。"""
+    try:
+        return latest_rows_by_stock(client.fetch_stock_info()), None
+    except (FetchError, SchemaMismatch, ValueError) as exc:
+        return None, f"FinMind TaiwanStockInfo 不可用，改用規則過濾：{exc}"
+
+
 def try_fetch_stock_info(client: FinMindClient) -> tuple[dict[str, dict[str, Any]] | None, str | None]:
     """取 TaiwanStockInfo；失敗回 (None, 錯誤訊息)，由呼叫端降級為規則過濾（第 9 節）。"""
     try:

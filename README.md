@@ -36,6 +36,12 @@ pytest
 `.github/workflows/verify-api.yml` 僅能手動觸發（Actions → verify-api → Run workflow），不使用任何 Secrets。
 會對規格第 3 節端點發出真實請求，產出 `verify_report/report.md`（同時顯示於該次執行的 Summary 頁並上傳為 artifact）。
 
+## 選股引擎全量試跑（M4）
+
+同一支 `verify-api` workflow 選 `mode = m4_dry_run`（可填 `as_of_date`），以真實 60 週官方資料試跑選股引擎，
+產出 `dry_run_report/report.md` 與 `result.json`（artifact `m4-dry-run-report`），**不**部署 Pages、**不**寫入 `site/`。
+報告內含第 10.1 節第 3、4 項核對，以及 docs/decisions.md「待裁定」各項所需的實測統計。本機可執行 `python -m tools.dry_run_m4 --out dry_run_report`。
+
 ## 進度
 
 | 里程碑 | 內容 | 狀態 |
@@ -43,7 +49,7 @@ pytest
 | M1 | 專案骨架、設定檔、時區與民國年工具 | 完成 |
 | M2 | TWSE／TPEx／FinMind 抓取器 | 完成（verify-api run1～run3；見 docs/api-verification.md） |
 | M3 | 還原價、真正週 K、指標、週結算判定 | 完成（verify-api run4；裁定 M3-Q1～Q7 見 docs/decisions.md） |
-| M4 | 選股引擎 | 未開始 |
+| M4 | 選股引擎 | 程式完成，待 m4_dry_run 試跑與待裁定事項 |
 | M5 | 輸出與靜態網頁 | 未開始 |
 | M6 | GitHub Actions 與 Pages 部署 | 未開始 |
 | M7 | 第二階段回測 | 第一階段驗收後才開始 |
