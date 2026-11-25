@@ -4,7 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.adjustments import apply_plan, build_plan, codes_with_share_structure_change
+from src.adjustments import (SHARE_STRUCTURE_LOOKBACK_WEEKS, apply_plan, build_plan,
+                             codes_with_share_structure_change, share_structure_since)
 from src.fetchers.parsing import CorporateEvent
 
 START, END = date(2026, 1, 1), date(2026, 11, 20)
@@ -93,5 +94,17 @@ def test_share_structure_change_codes():
         ev("0052", date(2026, 3, 1), "etf_split", 245.3, 35.04),
         ev("1808", date(2026, 9, 1), "capital_reduction", 34.45, 37.16),
     ], START, END)
-    assert codes_with_share_structure_change(plan, date(2026, 1, 1)) == {"7780", "0052", "1808"}
-    assert codes_with_share_structure_change(plan, date(2026, 6, 1)) == {"1808"}   # 視窗起點由呼叫端決定
+    assert SHARE_STRUCTURE_LOOKBACK_WEEKS == 45                       # M3-Q4 裁定
+    as_of = date(2026, 11, 20)
+    assert share_structure_since(as_of) == date(2026, 1, 9)            # 2026-11-20 − 45 週
+    assert codes_with_share_structure_change(plan, as_of) == {"7780", "0052", "1808"}
+    assert codes_with_share_structure_change(plan, date(2026, 12, 1)) == {"0052", "1808"}   # 起點 2026-01-20 → 7780（01-19）出窗
+    assert codes_with_share_structure_change(plan, date(2026, 8, 31)) == {"7780", "0052"}   # as_of 之後的事件不算
+
+
+def test_share_structure_window_boundary_is_exclusive():
+    as_of = date(2026, 11, 20)
+    plan = build_plan([ev("7780", share_structure_since(as_of), "par_value_change", 185, 18.5),
+                       ev("6949", share_structure_since(as_of) + timedelta(days=1), "par_value_change", 1490, 74.5)],
+                      START, END)
+    assert codes_with_share_structure_change(plan, as_of) == {"6949"}

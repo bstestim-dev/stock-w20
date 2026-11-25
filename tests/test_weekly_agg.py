@@ -172,6 +172,7 @@ def test_suspended_in_current_week_flagged():
     rows = weeks("2330", 21) + rows_for_week("2330", MON0 + timedelta(weeks=21), [1] * 5, no_price=range(5))
     r = stock_indicators(frame(rows), ws(MON0 + timedelta(weeks=21, days=4)), CFG)
     assert r["has_current_week_bar"] is False and r["suspended_weeks"] == ["2026-W23"]
+    assert r["notes"] == ["2026-W23：全週停牌，本週不計入週K"]                 # M3-Q7 文字
 
 
 def test_conflict_code_has_no_indicators():
@@ -217,3 +218,33 @@ def test_weekly_bars_all_matches_per_code():
         b, s_ = weekly_bars(df[df["code"] == code])
         pd.testing.assert_frame_equal(bars[code], b, check_dtype=False)
         assert susp.get(code, []) == s_
+
+
+def test_partial_ohlc_day_is_invalid():
+    """M3-Q6：只有部分開高低收（例：有收盤、無開盤）整天視為無效日，不納入週 K 價格；成交量照計。"""
+    rows = rows_for_week("2330", MON0, [100, 101, 102, 103, 104])
+    rows[4]["open"] = None
+    rows[3]["high"] = 0
+    bars, suspended = weekly_bars(frame(rows))
+    b = bars.iloc[0]
+    assert b["valid_days"] == 3 and b["week_end_date"] == MON0 + timedelta(days=2) and b["close"] == 102
+    assert b["volume_lots"] == pytest.approx(5000.0) and suspended == []
+
+
+def test_missing_week_flagged_in_compute_all():
+    """M3-Q7：市場有交易、該代號整週無資料列 →「資料缺週」；首筆資料之前的週不算。"""
+    rows = weeks("2330", 22)
+    gap = MON0 + timedelta(weeks=10)
+    rows = [r for r in rows if week_monday(r["date"]) != gap]
+    rows += [r for r in weeks("1101", 22)]
+    late = [r for r in weeks("6949", 22) if r["date"] >= MON0 + timedelta(weeks=15)]   # 第 15 週才開始有資料
+    out = compute_all(frame(rows + late), ws(MON0 + timedelta(weeks=21, days=4)), CFG)
+    assert out["2330"]["missing_weeks"] == ["2026-W12"] and "2026-W12：資料缺週" in out["2330"]["notes"]
+    assert out["1101"]["missing_weeks"] == [] and out["6949"]["missing_weeks"] == []
+    assert out["2330"]["suspended_weeks"] == []
+
+
+def test_missing_week_includes_current_week():
+    rows = weeks("2330", 21) + weeks("1101", 22)
+    out = compute_all(frame(rows), ws(MON0 + timedelta(weeks=21, days=4)), CFG)
+    assert out["2330"]["missing_weeks"] == ["2026-W23"] and out["2330"]["has_current_week_bar"] is False

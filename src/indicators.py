@@ -5,7 +5,10 @@
 - 有效交易日：原始開高低收皆有值且 > 0（TWSE ``--``、TPEx ``---``／``----`` 視為無成交價；D2）。
 - Open_w＝首個有效日 open_adj；High_w／Low_w＝有效日 max／min；Close_w＝最後有效日 close_adj；
   Vol_w＝該週所有列成交股數合計 ÷ 1000（含無成交價日的零股量；D2），內部保留小數。
-- 全週無有效交易日 → 不產生週 K，記入 ``suspended_weeks``。
+- 全週無有效交易日 → 不產生週 K，記入 ``suspended_weeks``，註記「全週停牌，本週不計入週K」。
+- 該市場當週有交易、但該代號自首筆資料起至基準週之間整週無任何資料列 → 記入 ``missing_weeks``，
+  註記「資料缺週」（警示文字依 2026-11-25 裁定 M3-Q7）。
+- 只有部分開高低收的日子整天視為無效日（M3-Q6）；成交張數內部保留小數，M5 顯示時才四捨五入（M3-Q5）。
 - W20MA：最近 ``ma_weeks`` 根有效週 K 之 Close_w 平均；不足即無值。
 - 前 20 週均量：不含本週之前 ``vol_lookback_weeks`` 根；不足 20 根時以實際可用（至少 4 根）計算並標註
   （第 9 節，門檻依 Q1 裁定為 21 根週 K）。
@@ -28,6 +31,8 @@ LOTS_PER_SHARE = 1 / 1000
 MIN_VOL_SAMPLE_WEEKS = 4      # 第 9 節：均量至少以 4 週計算
 D_SHORT, D_LONG = 20, 100     # 個股日 20MA、日 100MA（規格固定）
 PROJECTION_DAYS = 5           # 推算滿週量「以 5 日換算」（第 4.3A 節）
+NOTE_SUSPENDED_WEEK = "全週停牌，本週不計入週K"   # M3-Q7 裁定
+NOTE_MISSING_WEEK = "資料缺週"                     # M3-Q7 裁定
 
 
 # ---------------------------------------------------------------- 工具
@@ -129,7 +134,9 @@ def add_weekly_series(bars: pd.DataFrame, ma_weeks: int, vol_lookback: int) -> p
 
 def stock_indicators(df_code: pd.DataFrame, week: WeekStatus, cfg: Mapping[str, Any],
                      conflicts: list[str] | None = None,
-                     precomputed: tuple[pd.DataFrame, list[str]] | None = None) -> dict[str, Any]:
+                     precomputed: tuple[pd.DataFrame, list[str]] | None = None,
+                     market_weeks: Iterable[date] | None = None) -> dict[str, Any]:
+    """``market_weeks``：該代號所屬市場有有效交易的週一日期；未提供即不檢查資料缺週。"""
     scr = cfg["screening"]
     ma_weeks, vol_lookback = int(scr["ma_weeks"]), int(scr["vol_lookback_weeks"])
     spike_ratio = float(scr["volume_spike_ratio"])
@@ -142,7 +149,7 @@ def stock_indicators(df_code: pd.DataFrame, week: WeekStatus, cfg: Mapping[str, 
         "market": None if last is None else last["market"],
         "managed": bool(last["managed"]) if last is not None and "managed" in d else False,
         "adjustment_conflicts": list(conflicts or []),
-        "suspended_weeks": [], "notes": [],
+        "suspended_weeks": [], "missing_weeks": [], "notes": [],
         "bars": 0, "has_current_week_bar": False,
         "last_trade_date": None, "close_raw": None, "close_adj": None,
         "w20ma": None, "w20ma_prev": None, "close_w": None, "close_w_prev": None,
@@ -166,6 +173,13 @@ def stock_indicators(df_code: pd.DataFrame, week: WeekStatus, cfg: Mapping[str, 
 
     bars, suspended = precomputed if precomputed is not None else weekly_bars(d)
     res["suspended_weeks"] = list(suspended)
+    if market_weeks is not None:
+        own = set(d["week_monday"]) if "week_monday" in d else {week_monday(x) for x in d["date"]}
+        first = min(own)
+        res["missing_weeks"] = [iso_week_id(w) for w in sorted(set(market_weeks))
+                                if first <= w <= week.week_monday and w not in own]
+    res["notes"] += [f"{w}：{NOTE_SUSPENDED_WEEK}" for w in res["suspended_weeks"]]
+    res["notes"] += [f"{w}：{NOTE_MISSING_WEEK}" for w in res["missing_weeks"]]
     res["bars"] = int(len(bars))
     if bars.empty:
         return res
@@ -208,9 +222,11 @@ def compute_all(adj_daily: pd.DataFrame, week: WeekStatus, cfg: Mapping[str, Any
     df["week_monday"] = [x - timedelta(days=x.weekday()) for x in df["date"]]
     df["_valid"] = valid_day_mask(df)
     bars, suspended = weekly_bars_all(df)
+    market_weeks = {m: set(g.loc[g["_valid"], "week_monday"]) for m, g in df.groupby("market", sort=True)}
     empty = pd.DataFrame(columns=WEEK_COLUMNS)
     return {code: stock_indicators(g, week, cfg, conflicts.get(code),
-                                   precomputed=(bars.get(code, empty), suspended.get(code, [])))
+                                   precomputed=(bars.get(code, empty), suspended.get(code, [])),
+                                   market_weeks=market_weeks.get(g["market"].iloc[0], set()))
             for code, g in df.groupby("code", sort=True)}
 
 

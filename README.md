@@ -42,7 +42,7 @@ pytest
 | :--- | :--- | :--- |
 | M1 | 專案骨架、設定檔、時區與民國年工具 | 完成 |
 | M2 | TWSE／TPEx／FinMind 抓取器 | 完成（verify-api run1～run3；見 docs/api-verification.md） |
-| M3 | 還原價、真正週 K、指標、週結算判定 | 程式完成，待 verify-api run4 與待裁定事項 |
+| M3 | 還原價、真正週 K、指標、週結算判定 | 完成（verify-api run4；裁定 M3-Q1～Q7 見 docs/decisions.md） |
 | M4 | 選股引擎 | 未開始 |
 | M5 | 輸出與靜態網頁 | 未開始 |
 | M6 | GitHub Actions 與 Pages 部署 | 未開始 |

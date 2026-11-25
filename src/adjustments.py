@@ -6,10 +6,10 @@
 - Open/High/Low/Close 乘以 cum_factor；成交量不調整。
 - 以代號為鍵（證券代號於兩市不重複；上櫃轉上市者事件照樣適用）。
 
-尚待 Hector 裁定、目前採保守處理（不輸出可能錯誤的還原價）：
-- 同一代號同日有兩筆以上「不同」事件（規格 3.5 第 2 點僅原則性說明取最終參考價，未指明欄位）。
-- 事件價格不符 P_before > 0 且 P_ref > 0 的防呆檢核（規格未說明不符時如何處理）。
-以上兩種情況，該代號列入 ``conflicts``，其還原價與累積係數全部設為 NaN，下游指標因此無值、不進名單。
+以下兩種情況，該代號列入 ``conflicts``，其還原價與累積係數全部設為 NaN，下游指標因此無值、不進名單
+（2026-11-25 裁定 M3-Q1、M3-Q2，見 docs/decisions.md）：
+- 同一代號同日有兩筆以上「不同」事件。
+- 事件價格不符 P_before > 0 且 P_ref > 0 的防呆檢核（含空白）。
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -27,6 +27,9 @@ from src.fetchers.parsing import CorporateEvent
 # 會造成流通股數結構性跳變、使爆量倍數可能失真的事件（spec 3.5 第 5 點）
 SHARE_STRUCTURE_KINDS = frozenset({"capital_reduction", "par_value_change", "etf_split"})
 PRICE_COLUMNS = ("open", "high", "low", "close")
+# has_share_split_or_reduction 回看「近 45 週」（2026-11-25 裁定 M3-Q4：同規格書回溯預設 45 週，
+# 不隨 data_source.lookback_weeks 改為 60 而變動）
+SHARE_STRUCTURE_LOOKBACK_WEEKS = 45
 
 
 @dataclass
@@ -94,15 +97,21 @@ def apply_plan(daily: pd.DataFrame, plan: AdjustmentPlan) -> pd.DataFrame:
     return out
 
 
-def codes_with_share_structure_change(plan: AdjustmentPlan, since: date) -> set[str]:
-    """``since`` 之後（不含）發生減資、面額變更或 ETF 分割／反分割的代號（has_share_split_or_reduction）。
+def share_structure_since(as_of: date, lookback_weeks: int = SHARE_STRUCTURE_LOOKBACK_WEEKS) -> date:
+    """「近 45 週」視窗起點（不含）：as_of − 45 週。"""
+    return as_of - timedelta(weeks=lookback_weeks)
 
-    視窗起點由呼叫端決定：規格寫「近 45 週」，回溯期已改為 60 週（Q2），兩者是否一致待 Hector 裁定。
-    """
+
+def codes_with_share_structure_change(plan: AdjustmentPlan, as_of: date,
+                                      lookback_weeks: int = SHARE_STRUCTURE_LOOKBACK_WEEKS) -> set[str]:
+    """近 ``lookback_weeks`` 週內（as_of − 45 週之後、不含起點）發生減資、面額變更或
+    ETF 分割／反分割的代號（has_share_split_or_reduction）。衝突代號照樣列入。"""
+    since = share_structure_since(as_of, lookback_weeks)
     return {
         code for code, items in plan.factors.items()
-        if any(kind in SHARE_STRUCTURE_KINDS and d > since for d, _f, kind in items)
+        if any(kind in SHARE_STRUCTURE_KINDS and since < d <= as_of for d, _f, kind in items)
     } | {
         code for code, evs in plan.events.items()
-        if code in plan.conflicts and any(e.kind in SHARE_STRUCTURE_KINDS and e.event_date > since for e in evs)
+        if code in plan.conflicts
+        and any(e.kind in SHARE_STRUCTURE_KINDS and since < e.event_date <= as_of for e in evs)
     }
