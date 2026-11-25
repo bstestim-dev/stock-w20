@@ -94,4 +94,13 @@ const el2 = { textContent: '' };
 SW20.renderChart(el2, bars, null);
 assert.ok(/未載入/.test(el2.textContent));
 
+// 單列高度一致（M5b）：徽章欄單行截斷，完整內容放 title
+const cell = SW20.clipCell(['切線突破', '族群共振（同業 4 檔）', '<x>'], 'tag');
+assert.ok(cell.startsWith('<td class="clipcell" title="切線突破、族群共振（同業 4 檔）、&lt;x&gt;"><div class="clip">'), cell);
+assert.ok(!/class="wrap"/.test(cell));
+const tagCol = SW20.columns('new_cross', L, st).find((c) => c.key === 'tags');
+assert.ok(/class="clipcell"/.test(tagCol.html(rows[0])));
+const exitCol = SW20.columns('exit_alerts', L, st).find((c) => c.key === 'exit_status');
+assert.ok(/class="clipcell l" title="週中/.test(exitCol.html({ exit_action_note: '週中收盤低於暫定週 20MA' })));
+
 console.log('app_test: OK');

@@ -355,7 +355,8 @@ def screen(inp: ScreenInputs, cfg: Mapping[str, Any], force_light: str | None = 
 # ---------------------------------------------------------------- 資料蒐集
 
 def collect_inputs(client, cfg: Mapping[str, Any], requested_end: date, today: date,
-                   cache=None, progress=None, finmind_token: str | None = None) -> ScreenInputs:
+                   cache=None, progress=None, finmind_token: str | None = None,
+                   deadline: float | None = None) -> ScreenInputs:
     """依第 3 節已驗證端點抓取 ``screen`` 所需資料。行情、事件、基本資料失敗即拋錯（不發佈錯誤報告）；
     FinMind、處置／注意資料失敗則降級並記入 notes。"""
     from src.fetchers import finmind, history, tpex, twse
@@ -364,7 +365,7 @@ def collect_inputs(client, cfg: Mapping[str, Any], requested_end: date, today: d
 
     notes: list[str] = []
     hist = history.fetch_daily_history(client, requested_end, int(cfg["data_source"]["lookback_weeks"]),
-                                       cache=cache, today=today, progress=progress)
+                                       cache=cache, today=today, progress=progress, deadline=deadline)
     notes += hist.notes
     if hist.missing:
         notes.append("缺漏交易日：" + "；".join(f"{d} {r}" for d, r in hist.missing))
@@ -405,13 +406,22 @@ def collect_inputs(client, cfg: Mapping[str, Any], requested_end: date, today: d
 
 # ---------------------------------------------------------------- 執行入口（M5：產出 site/data/）
 
-def run(out_dir: str, env: Mapping[str, str] | None = None, client=None, today: date | None = None) -> int:
-    """抓資料 → 選股 → 參考欄 → 寫出 latest.json／latest.js／4 份 CSV。回傳 exit code（第 9 節：缺漏過多即非 0）。"""
+EXIT_OK, EXIT_INCOMPLETE, EXIT_BUDGET = 0, 2, 3
+
+
+def run(out_dir: str, env: Mapping[str, str] | None = None, client=None, today: date | None = None,
+        cache_dir: str | None = None, fetch_budget_min: float | None = None) -> int:
+    """抓資料 → 選股 → 參考欄 → 寫出 latest.json／latest.js／4 份 CSV。
+
+    回傳 exit code：0 完成；2 歷史缺漏超過第 9 節門檻（不寫出）；
+    3 日資料抓取超過 ``fetch_budget_min`` 分鐘（D5 冷啟動：已抓到的日資料已寫入 ``cache_dir``，不寫出，請再執行一次）。
+    """
     import os
     import sys
+    import time
 
     from src.config import get_finmind_token, load_config
-    from src.fetchers.history import HistoryIncomplete
+    from src.fetchers.history import DayCache, FetchBudgetExceeded, HistoryIncomplete
     from src.fetchers.http import HttpClient
     from src.fundamentals import collect_fundamentals
     from src.output import build_latest, write_site_data
@@ -425,11 +435,26 @@ def run(out_dir: str, env: Mapping[str, str] | None = None, client=None, today: 
                             max_retries=int(ds["max_retries"]))
     today = today or today_taipei()
     requested_end = opts.as_of_date or today
+    cache = DayCache(cache_dir) if cache_dir else None
+    deadline = time.monotonic() + fetch_budget_min * 60 if fetch_budget_min else None
+    t0 = time.monotonic()
+    n = [0]
+
+    def progress(day) -> None:
+        n[0] += 1
+        if n[0] % 20 == 0:
+            print(f"[{time.monotonic() - t0:4.0f}s] 日資料 {n[0]} 個平日（{day.trade_date} {day.status}"
+                  f"{'，快取' if day.from_cache else ''}）", flush=True)
+
     try:
-        inp = collect_inputs(client, cfg, requested_end, today, finmind_token=get_finmind_token(env))
+        inp = collect_inputs(client, cfg, requested_end, today, cache=cache, progress=progress,
+                             finmind_token=get_finmind_token(env), deadline=deadline)
     except HistoryIncomplete as exc:
         print(f"歷史資料缺漏過多，不產出報告：{exc}", file=sys.stderr)
-        return 2
+        return EXIT_INCOMPLETE
+    except FetchBudgetExceeded as exc:
+        print(f"{exc}（D5 冷啟動分次補齊；本次不更新報告）", file=sys.stderr)
+        return EXIT_BUDGET
     res = screen(inp, cfg)
 
     fundamentals: dict[str, dict] = {}
@@ -453,7 +478,11 @@ def main(argv: list[str] | None = None) -> int:
 
     ap = argparse.ArgumentParser(description="林恩如週 20MA 選股系統：產出 site/data/")
     ap.add_argument("--out", default="site/data")
-    return run(ap.parse_args(argv).out)
+    ap.add_argument("--cache-dir", default=None, help="DayCache 目錄（GitHub Actions 以 actions/cache 保留）")
+    ap.add_argument("--fetch-budget-min", type=float, default=None,
+                    help="日資料抓取時間上限（分鐘）；超過即保存快取並以結束碼 3 結束")
+    a = ap.parse_args(argv)
+    return run(a.out, cache_dir=a.cache_dir, fetch_budget_min=a.fetch_budget_min)
 
 
 if __name__ == "__main__":

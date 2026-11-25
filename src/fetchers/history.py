@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
@@ -33,6 +34,14 @@ MAX_MISSING_RATIO = 0.05
 
 class HistoryIncomplete(RuntimeError):
     """歷史資料缺漏超過第 9 節容許範圍。"""
+
+
+class FetchBudgetExceeded(RuntimeError):
+    """抓取時間超過本次執行預算（D5：冷啟動分次補齊快取）。已抓到的日資料都已寫入快取。"""
+
+    def __init__(self, done: int, total: int, cached: int):
+        super().__init__(f"本次抓取時間已達上限：快取已有 {cached + done}／{total} 個平日，請再執行一次以補齊")
+        self.done, self.total, self.cached = done, total, cached
 
 
 @dataclass
@@ -94,7 +103,10 @@ class DayCache:
         if result.trade_date >= today or result.status not in ("trading", "non_trading"):
             return False
         payload = {"twse": _market_to_dict(result.twse), "tpex": _market_to_dict(result.tpex)}
-        self._path(result.trade_date).write_bytes(gzip.compress(json.dumps(payload, ensure_ascii=False).encode("utf-8")))
+        path = self._path(result.trade_date)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_bytes(gzip.compress(json.dumps(payload, ensure_ascii=False).encode("utf-8")))
+        tmp.replace(path)          # 原子替換：執行中被中止也不留下半個檔
         return True
 
 
@@ -184,7 +196,10 @@ def fetch_daily_history(
     cache: DayCache | None = None,
     today: date | None = None,
     progress: Callable[[DayResult], None] | None = None,
+    deadline: float | None = None,
 ) -> HistoryResult:
+    """``deadline``（``time.monotonic()`` 值）：超過即停止抓取並拋 ``FetchBudgetExceeded``；
+    每抓完一日立即寫入快取（由舊到新），因此中止後下次執行可接續（D5）。"""
     today = today or today_taipei()
     end = min(end, today)
     start = week_monday(end) - timedelta(weeks=lookback_weeks - 1)
@@ -193,16 +208,23 @@ def fetch_daily_history(
     cached = {d: r for d in weekdays if cache and (r := cache.get(d)) is not None}
     todo = [d for d in weekdays if d not in cached]
 
-    fetched: dict[date, DayResult] = {d: fetch_day(client, d) for d in todo}
+    if progress:
+        for d in weekdays:
+            if d in cached:
+                progress(cached[d])
+    fetched: dict[date, DayResult] = {}
+    for d in todo:
+        if deadline is not None and time.monotonic() > deadline:
+            raise FetchBudgetExceeded(len(fetched), len(weekdays), len(cached))
+        fetched[d] = fetch_day(client, d)
+        if cache:
+            cache.put(fetched[d], today)
+        if progress:
+            progress(fetched[d])
 
     days: list[DayResult] = []
     for d in weekdays:
-        result = cached.get(d) or fetched[d]
-        if cache and d in fetched:
-            cache.put(result, today)
-        days.append(result)
-        if progress:
-            progress(result)
+        days.append(cached.get(d) or fetched[d])
 
     trading = [d for d in days if d.status == "trading"]
     if not trading:

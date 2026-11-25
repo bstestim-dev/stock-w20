@@ -8,7 +8,7 @@ import pytest
 
 from src import screener as sc
 from src.config import load_config
-from src.output import CHART_WEEKS, CSV_COLUMNS, build_latest, clean, csv_text, write_site_data
+from src.output import CHART_WEEKS, CSV_COLUMNS, CSV_HEADERS_ZH, build_latest, clean, csv_text, write_site_data
 from src.screener import screen
 from tests.test_screener_rules import make_inputs
 
@@ -86,15 +86,16 @@ def test_csv_bom_header_and_values(tmp_path, latest):
     raw = (tmp_path / "new_cross.csv").read_bytes()
     assert raw.startswith(b"\xef\xbb\xbf")                                   # UTF-8 BOM
     lines = raw.decode("utf-8-sig").split("\r\n")
-    assert lines[0].split(",") == CSV_COLUMNS
+    assert lines[0].split(",") == [CSV_HEADERS_ZH[c] for c in CSV_COLUMNS]
+    assert lines[0].startswith("證券代號,證券簡稱,市場別")
     assert len([x for x in lines[1:] if x]) == len(latest["tabs"]["new_cross"])
     import csv as _csv
     rows = list(_csv.DictReader(raw.decode("utf-8-sig").splitlines()))
-    r = next(x for x in rows if x["stock_id"] == "2330")
-    assert r["is_volume_spike"] == "false" and r["signals.trendline_break"] in ("true", "false")
-    assert r["fundamentals_ref.insti_5d_net_lots"] == "4520"                # 顯示時四捨五入到整張
-    assert r["vol_week_lots"] == str(round(next(x for x in latest["tabs"]["new_cross"] if x["stock_id"] == "2330")["vol_week_lots"]))
-    assert "處置股" in r["warnings"] and "、" in r["warnings"]
+    r = next(x for x in rows if x["證券代號"] == "2330")
+    assert r["是否爆量"] == "false" and r["切線突破"] in ("true", "false")
+    assert r["近5日三大法人買賣超(張)"] == "4520"                          # 顯示時四捨五入到整張
+    assert r["本週累計成交張數"] == str(round(next(x for x in latest["tabs"]["new_cross"] if x["stock_id"] == "2330")["vol_week_lots"]))
+    assert "處置股" in r["警示"] and "、" in r["警示"]
     assert json.loads((tmp_path / "latest.json").read_text(encoding="utf-8")) == latest
     js = (tmp_path / "latest.js").read_text(encoding="utf-8")
     assert js.startswith("window.__SW20_LATEST__ = {") and js.rstrip().endswith("};")
@@ -103,7 +104,13 @@ def test_csv_bom_header_and_values(tmp_path, latest):
 
 
 def test_csv_empty_tab_has_header_only():
-    assert csv_text([]).split("\r\n")[0].split(",") == CSV_COLUMNS
+    assert csv_text([]).split("\r\n")[0].split(",") == [CSV_HEADERS_ZH[c] for c in CSV_COLUMNS]
+
+
+def test_csv_headers_complete_and_unique():
+    assert set(CSV_HEADERS_ZH) == set(CSV_COLUMNS)
+    names = list(CSV_HEADERS_ZH.values())
+    assert len(names) == len(set(names)) and all("," not in n for n in names)
 
 
 class FakeClient:
@@ -144,3 +151,26 @@ def test_run_skip_fundamentals_and_incomplete(tmp_path, monkeypatch):
     out = tmp_path / "x"
     assert sc.run(str(out), env={}, client=FakeClient(), today=date(2026, 7, 31)) == 2
     assert not (out / "latest.json").exists()                               # 缺漏過多不發佈
+
+
+def test_run_exit_3_when_fetch_budget_exceeded(tmp_path, monkeypatch):
+    from src.fetchers.history import FetchBudgetExceeded
+    seen = {}
+
+    def over(*a, **k):
+        seen.update(k)
+        raise FetchBudgetExceeded(100, 300, 50)
+    monkeypatch.setattr(sc, "collect_inputs", over)
+    out = tmp_path / "site"
+    assert sc.run(str(out), env={}, client=FakeClient(), today=date(2026, 7, 31),
+                  cache_dir=str(tmp_path / "cache"), fetch_budget_min=16) == 3
+    assert not (out / "latest.json").exists()                               # 補齊前不更新報告
+    assert seen["cache"] is not None and seen["deadline"] is not None
+    assert (tmp_path / "cache").is_dir()
+
+
+def test_main_parses_cache_and_budget(monkeypatch):
+    got = {}
+    monkeypatch.setattr(sc, "run", lambda out, **k: got.update(out=out, **k) or 0)
+    assert sc.main(["--out", "x", "--cache-dir", ".cache/daycache", "--fetch-budget-min", "16"]) == 0
+    assert got == {"out": "x", "cache_dir": ".cache/daycache", "fetch_budget_min": 16.0}

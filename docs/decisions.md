@@ -69,12 +69,28 @@ M3-Q1～Q7 依 verify-api run4 實測（見 [`api-verification.md`](api-verifica
 | :--- | :--- | :--- |
 | M4b-Q1 | 事件對帳不符的處理（00775B 台新投等債15+，2025-11-20 除息） | **A：照第 3.5 節用官方事件表的 P_ref／P_before 計算還原因子；對帳不符只列在驗收報告（verify-api、全量試跑），不進名單警示。** 原因（verify-api run 45616245478 官方原始列）：STOCK_DAY 2025-11-18 收盤 32.61（成交 1,766 股）；11-19 成交 6 股、11-20 成交 45 股，兩日開高低收皆為「--」；MI_INDEX 2025-11-19 無收盤價，最後揭示買價 32.53、賣價 32.59；TWT49U 2025-11-20 除權息前收盤價 32.59、參考價 32.22、息值 0.37。即 11-19 無正常成交，官方「除權息前收盤價」32.59 等於當日最後揭示賣價而非成交價；本系統取得的前一有效收盤 32.61（11-18）正確。差異屬官方事件表的定義，非本系統計算錯誤；還原因子差約 0.06%。 |
 
+## 2026-11-25（Asia/Taipei）M5 裁定
+
+依 verify-api `m5_preview`（run 45621969504，32 分 39 秒，notes 與 errors 皆空）真實資料畫面裁定。
+
+| 編號 | 議題 | 裁定 |
+| :--- | :--- | :--- |
+| M5-Q1 | 近 5 日三大法人：某日查無該代號 | 照暫定：查無的日子不計入加總；5 日皆查無為 `null`；某市場某日整張表抓取失敗時 notes 註明「僅取得 N／5 個交易日」。 |
+| M5-Q2 | ETF 專頁預設顯示範圍 | 照暫定：預設只顯示有訊號（兩區）的 ETF，並預設隱藏債券與槓桿／反向；下拉可切「新站上」「已站上且爆量」「全部 ETF」，「顯示全部子類型」一鍵展開。 |
+| M5-Q3 | CSV 欄名與格式 | **改為中文欄名**（`src/output.py` 的 `CSV_HEADERS_ZH`，依第 6.3 節欄位說明與第 7 節表格欄名），方便以 Excel 閱讀；**JSON 鍵名維持英文**。其餘照暫定：依第 6.3 節順序、巢狀欄位各自一欄、`warnings` 以「、」連接、布林寫 true／false、成交張數四捨五入到整張。 |
+| M5b | 表格列高度不一致 | 修正（非裁定事項）：原因為「加分標籤」「警示」兩欄設定可換行，徽章多時折成 2～3 行撐高整列。改為所有儲存格單行、徽章與長文字（含出場說明、過長名稱）超出寬度以「…」截斷，完整內容放滑鼠停留提示（title）。 |
+
+## M6 實作說明（非裁定，供核對）
+
+- `run-screen.yml` 依第 8.2 節：僅 `workflow_dispatch`、四個輸入、`permissions: contents: read, pages: write, id-token: write`、`actions/upload-pages-artifact`＋`actions/deploy-pages`、Python 3.12、`TZ=Asia/Taipei`、`timeout-minutes: 30`、`FINMIND_TOKEN` 只取自 Secrets。
+- `lookback_weeks` 輸入預設留空（＝`config.yaml` 的 60 週，Q2 裁定）。第 6.2 節表列預設 `"45"` 早於 Q2 裁定，若照填會把 60 週覆寫成 45 週。
+- D5 快取：`actions/cache/restore` 取最近一次快取、`actions/cache/save` 以 `if: always()` 儲存（每次以 `run_id` 為鍵）；日資料改為「每抓完一日立即原子寫入」，並以 `--fetch-budget-min 16` 限制日資料抓取時間，超過即保存快取、以結束碼 3 結束、不更新 Pages（冷啟動 1～3 次補齊）。
+- Node 20 runtime 淘汰：兩支 workflow 的 actions 一律改用支援 Node 24 的主版本（checkout v6、setup-python v6、upload-artifact v6、cache v5、upload-pages-artifact v5、deploy-pages v5）。
+
 ## 待確認（尚未生效）
 
 本節**不構成裁定**；程式先採「現行處理」，Hector 裁定後再移至上方裁定表。
 
 | 編號 | 議題 | 規格依據與疑點 | 現行處理 |
 | :--- | :--- | :--- | :--- |
-| M5-Q1 | 近 5 日三大法人：某日查無該代號 | 第 6.3 節 `insti_5d_net_lots`、第 7 節「近 5 日三大法人買賣超（張）」；TWSE T86、TPEx insti/dailyTrade 只列有資料的代號，查無列代表「當日法人無買賣」或「資料缺漏」無法從回應區分。 | 查無的日子不計入加總；5 日皆查無為 `null`。某市場某日整張表抓取失敗時，notes 註明「僅取得 N／5 個交易日」。 |
-| M5-Q2 | ETF 專頁預設顯示範圍 | M4-Q5 定案「收錄全部 ETF、以 `etf_zone` 標示兩區」，未定預設畫面要顯示兩區或全部。 | 預設「兩區（有訊號）」＋預設隱藏債券、槓反；下拉可切「新站上」「已站上且爆量」「全部 ETF」，「顯示全部子類型」一鍵展開。 |
-| M5-Q3 | CSV 欄名與格式 | 第 6.3 節「欄位定義（同時對應 CSV 欄位）」未規定欄名語言與巢狀欄位寫法。 | 欄名用第 6.3 節英文鍵名、依表列順序；`signals`、`fundamentals_ref` 攤平為 `signals.xxx`、`fundamentals_ref.xxx`；`warnings` 以「、」連接；布林寫 `true`／`false`；成交張數四捨五入到整張（M3-Q5），其餘數值同 JSON（4 位小數）。最後附 `avg_daily_lots_20w`、`etf_zone`、`has_share_split_or_reduction`、`unadjusted_jump_dates`。 |
+| M6-Q1 | 快取過期導致每週都冷啟動 | D5 以 `actions/cache` 保留日資料、25 分鐘驗收以有快取為準。GitHub 官方文件：超過 7 天未存取的快取會被移除。若每週五收盤後執行一次，兩次間隔可能超過 7 天，快取被移除後又需 1～3 次補齊，實務上無法每次 25 分鐘內完成。 | 維持 D5（只用 `actions/cache`）。選項：(A) 維持現狀，並建議兩次執行間隔不超過 7 天（例如週中多跑一次）；(B) 額外把日資料快取放進 Pages 產物（`site/cache/*.json.gz`，皆為公開官方行情），下次執行在 `actions/cache` 未命中時改從已部署的 Pages 網址下載，不需 commit、不需改權限；(C) 以 commit 或 Release 保存快取——需 `contents: write`，與第 8.2 節權限不符，不建議。 |

@@ -160,3 +160,35 @@ def test_managed_flag_survives_cache_roundtrip(tmp_path):
     cache = history.DayCache(tmp_path)
     assert cache.put(r, TODAY)
     assert cache.get(d).tpex.quotes[0].managed is True
+
+
+# ---------------------------------------------------------------- M6：D5 快取分次補齊
+
+def test_cache_written_per_day_and_budget_resumes(monkeypatch, tmp_path):
+    """抓取超過預算即停止並拋 FetchBudgetExceeded；已抓的日資料已逐日寫入快取，下次接續、不重抓。"""
+    calls = install(monkeypatch, normal, normal)
+    cache = history.DayCache(tmp_path)
+    clock = {"t": 0.0}
+    monkeypatch.setattr(history.time, "monotonic", lambda: clock["t"])
+
+    def tick(day):
+        clock["t"] += 1.0                                       # 每處理一日前進 1 秒
+
+    with pytest.raises(history.FetchBudgetExceeded) as ei:
+        history.fetch_daily_history(None, date(2026, 10, 16), lookback_weeks=2, cache=cache, today=TODAY,
+                                    progress=tick, deadline=3.5)
+    assert ei.value.done == 4 and ei.value.total == 10 and ei.value.cached == 0
+    assert len(list(tmp_path.glob("*.json.gz"))) == 4 and not list(tmp_path.glob("*.tmp"))
+    assert "4／10" in str(ei.value)
+
+    calls.clear()
+    res = history.fetch_daily_history(None, date(2026, 10, 16), lookback_weeks=2, cache=cache, today=TODAY)
+    assert len(calls) == 12                                     # 只抓剩下 6 個平日 × 2 市場
+    assert res.as_of_date == date(2026, 10, 16) and len(list(tmp_path.glob("*.json.gz"))) == 10
+
+
+def test_no_deadline_means_no_budget(monkeypatch, tmp_path):
+    install(monkeypatch, normal, normal)
+    res = history.fetch_daily_history(None, date(2026, 10, 16), lookback_weeks=2, cache=history.DayCache(tmp_path),
+                                      today=TODAY, deadline=None)
+    assert res.as_of_date == date(2026, 10, 16)

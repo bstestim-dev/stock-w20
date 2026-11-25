@@ -40,10 +40,10 @@ jobs:
       VERIFY_SAMPLE_DATE: ${{ inputs.sample_date }}
       VERIFY_WINDOW_END: ${{ inputs.window_end }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: 安裝套件
@@ -54,7 +54,7 @@ jobs:
         run: python -m tools.verify_api --out verify_report
       - name: 上傳報告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: verify-api-report
           path: verify_report/
@@ -68,10 +68,10 @@ jobs:
       TZ: Asia/Taipei
       DRY_RUN_AS_OF: ${{ inputs.as_of_date }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: 安裝套件
@@ -82,7 +82,7 @@ jobs:
         run: python -m tools.dry_run_m4 --out dry_run_report
       - name: 上傳報告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: m4-dry-run-report
           path: dry_run_report/
@@ -96,10 +96,10 @@ jobs:
       TZ: Asia/Taipei
       SW20_AS_OF_DATE: ${{ inputs.as_of_date }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: 安裝套件
@@ -109,7 +109,7 @@ jobs:
       - name: 產出 site/data
         run: python -m src.screener --out site/data
       - name: 上傳網頁預覽
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: site-preview
           path: site/

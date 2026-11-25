@@ -28,6 +28,17 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
+  // 單列高度一致（M5b）：多個徽章或長文字一律單行、超出寬度以「…」截斷，完整內容放 title（滑鼠停留顯示）
+  function clipCell(items, cls) {
+    var title = items.join('、');
+    return '<td class="clipcell" title="' + esc(title) + '"><div class="clip">' +
+      items.map(function (t) { return '<span class="badge ' + cls + '">' + esc(t) + '</span>'; }).join('') + '</div></td>';
+  }
+  function clipText(text) {
+    return '<td class="clipcell l" title="' + esc(text || '') + '"><div class="clip">' + esc(text || '') + '</div></td>';
+  }
+  SW20.clipCell = clipCell;
+
   function signCls(v) { return !isNum(v) ? '' : (v > 0 ? 'pos' : (v < 0 ? 'neg' : '')); }
   function generatedText(iso) {      // "2026-11-25T18:05:12+08:00" → "2026-11-25 18:05 Asia/Taipei"
     if (!iso) return '—';
@@ -125,7 +136,10 @@
     var cols = [{
       key: 'stock_id', label: '代碼／名稱', cls: 'l',
       sort: function (r) { return r.stock_id; },
-      html: function (r) { return '<td class="l"><span class="code">' + esc(r.stock_id) + '</span> ' + esc(r.stock_name) + '</td>'; }
+      html: function (r) {
+        return '<td class="l" title="' + esc(r.stock_id + ' ' + (r.stock_name || '')) + '"><div class="clip name"><span class="code">' +
+          esc(r.stock_id) + '</span> ' + esc(r.stock_name) + '</div></td>';
+      }
     }, {
       key: 'market', label: '市場', cls: 'l',
       sort: function (r) { return r.market; },
@@ -133,7 +147,7 @@
     }];
     if (tab === 'exit_alerts') {
       cols.push({ key: 'exit_status', label: '出場狀態', cls: 'l', sort: function (r) { return r.exit_status; },
-        html: function (r) { return '<td class="l">' + esc(r.exit_action_note) + '</td>'; } });
+        html: function (r) { return clipText(r.exit_action_note); } });
     }
     if (tab === 'etf') {
       cols.push({ key: 'etf_subtype', label: '子類型', cls: 'l', sort: function (r) { return r.etf_subtype; },
@@ -159,13 +173,9 @@
     }
     cols.push(num('score', '綜合評分', 0));
     cols.push({ key: 'tags', label: '加分標籤', cls: 'l', sort: function (r) { return tagsFor(r).length; },
-      html: function (r) {
-        return '<td class="wrap">' + tagsFor(r).map(function (t) { return '<span class="badge tag">' + esc(t) + '</span>'; }).join('') + '</td>';
-      } });
+      html: function (r) { return clipCell(tagsFor(r), 'tag'); } });
     cols.push({ key: 'warnings', label: '警示', cls: 'l', sort: function (r) { return (r.warnings || []).length; },
-      html: function (r) {
-        return '<td class="wrap">' + warningsFor(r, latest).map(function (t) { return '<span class="badge warn">' + esc(t) + '</span>'; }).join('') + '</td>';
-      } });
+      html: function (r) { return clipCell(warningsFor(r, latest), 'warn'); } });
     if (tab !== 'etf' && state.showFund) {
       var f = function (r) { return r.fundamentals_ref || {}; };
       cols.push({ key: 'eps', label: '最新季 EPS', fund: true, sort: function (r) { return f(r).eps; },

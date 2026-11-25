@@ -51,3 +51,11 @@ def test_no_forbidden_ui():
 def test_app_js_unit():
     r = subprocess.run(["node", str(ROOT / "tests" / "js" / "app_test.js")], capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_single_line_rows_css():
+    """M5b：表格列高度一致——儲存格不換行、徽章欄截斷（white-space: nowrap + text-overflow: ellipsis）。"""
+    css = (SITE / "styles.css").read_text(encoding="utf-8")
+    assert "white-space: normal" not in css
+    assert re.search(r"\.clip \{[^}]*overflow: hidden;[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap;", css)
+    assert re.search(r"tbody tr\.row td \{ height: 34px;", css)
