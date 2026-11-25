@@ -1,18 +1,20 @@
 # M2 API 實測驗證（2026-11-25 裁定 (c)）：僅限手動觸發，不含 schedule，不使用任何 Secrets。
 # M4 起增加 mode=m4_dry_run：以真實 60 週資料試跑選股引擎（不部署 Pages、不寫入 site/）。
+# M5 起增加 mode=m5_preview：產出 site/data/（latest.json、latest.js、4 份 CSV）並把整個 site/ 打包成 artifact
+#   site-preview 供下載預覽；不部署 Pages（Pages 部署為 M6 的 run-screen.yml）。
 name: verify-api
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "api＝API 實測（M2～M3）；m4_dry_run＝M4 選股引擎全量試跑（約 30～60 分鐘，上限 120 分鐘）"
+        description: "api＝API 實測；m4_dry_run＝選股引擎全量試跑；m5_preview＝產出網頁預覽 artifact（後兩者約 30～60 分鐘）"
         required: false
         default: "api"
         type: choice
-        options: ["api", "m4_dry_run"]
+        options: ["api", "m4_dry_run", "m5_preview"]
       as_of_date:
-        description: "m4_dry_run 用：基準日 YYYY-MM-DD（空白＝今日，Asia/Taipei）"
+        description: "m4_dry_run／m5_preview 用：基準日 YYYY-MM-DD（空白＝今日，Asia/Taipei）"
         required: false
         default: ""
       sample_date:
@@ -29,7 +31,7 @@ permissions:
 
 jobs:
   verify:
-    if: ${{ inputs.mode != 'm4_dry_run' }}
+    if: ${{ inputs.mode == 'api' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -84,4 +86,31 @@ jobs:
         with:
           name: m4-dry-run-report
           path: dry_run_report/
+          retention-days: 14
+
+  m5-preview:
+    if: ${{ inputs.mode == 'm5_preview' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      TZ: Asia/Taipei
+      SW20_AS_OF_DATE: ${{ inputs.as_of_date }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 安裝套件
+        run: pip install -r requirements.txt
+      - name: 單元測試
+        run: pytest -q
+      - name: 產出 site/data
+        run: python -m src.screener --out site/data
+      - name: 上傳網頁預覽
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-preview
+          path: site/
           retention-days: 14

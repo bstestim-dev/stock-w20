@@ -3,7 +3,7 @@
 ``collect_inputs`` 抓取所需官方資料（僅用第 3 節已驗證端點），``screen`` 為純計算：
 標的過濾（U1／U2）→ 還原價 → 真正週 K 指標 → 頁 1／頁 2（互斥）→ ETF 專頁 → 大盤紅綠燈（不過濾）
 → 出場與週中警戒 → S1～S6 評分（不硬剔除）。輸出為 Python 結構，欄位鍵名對齊第 6.3 節；
-序列化（latest.json／CSV）於 M5 實作。
+序列化見 ``src.output``，參考欄見 ``src.fundamentals``，執行入口 ``python -m src.screener --out site/data``（M5）。
 
 2026-11-25 裁定（docs/decisions.md「M4 裁定」）：
 - M4-Q1 「疑似未還原跳空異常，請人工看圖複核」：收盤跌 > 35% 或漲 > 50% 且查無事件（見 anomalies）。
@@ -282,7 +282,7 @@ def screen(inp: ScreenInputs, cfg: Mapping[str, Any], force_light: str | None = 
             "has_share_split_or_reduction": code in share_change,
             "unadjusted_jump_dates": list(jumps.get(code, [])),
             "adjustment_conflicts": list(ind.get("adjustment_conflicts", [])),
-            "fundamentals_ref": None,           # M5 實作
+            "fundamentals_ref": None,           # 由 output.build_latest 以 fundamentals 結果填入
             "_page": page_of(ind, spike_ratio),
         }
 
@@ -401,3 +401,60 @@ def collect_inputs(client, cfg: Mapping[str, Any], requested_end: date, today: d
         tpex_warning=attempt("TPEx 注意股", tpex.fetch_trading_warning),
         notes=notes,
     )
+
+
+# ---------------------------------------------------------------- 執行入口（M5：產出 site/data/）
+
+def run(out_dir: str, env: Mapping[str, str] | None = None, client=None, today: date | None = None) -> int:
+    """抓資料 → 選股 → 參考欄 → 寫出 latest.json／latest.js／4 份 CSV。回傳 exit code（第 9 節：缺漏過多即非 0）。"""
+    import os
+    import sys
+
+    from src.config import get_finmind_token, load_config
+    from src.fetchers.history import HistoryIncomplete
+    from src.fetchers.http import HttpClient
+    from src.fundamentals import collect_fundamentals
+    from src.output import build_latest, write_site_data
+    from src.timezone import format_taipei_iso, now_taipei, today_taipei
+
+    env = os.environ if env is None else env
+    cfg, opts = load_config(env=env)
+    ds = cfg["data_source"]
+    if client is None:
+        client = HttpClient(delay_sec=float(ds["request_delay_sec"]), timeout_sec=float(ds["timeout_sec"]),
+                            max_retries=int(ds["max_retries"]))
+    today = today or today_taipei()
+    requested_end = opts.as_of_date or today
+    try:
+        inp = collect_inputs(client, cfg, requested_end, today, finmind_token=get_finmind_token(env))
+    except HistoryIncomplete as exc:
+        print(f"歷史資料缺漏過多，不產出報告：{exc}", file=sys.stderr)
+        return 2
+    res = screen(inp, cfg)
+
+    fundamentals: dict[str, dict] = {}
+    notes: list[str] = []
+    if ds.get("enable_optional_fundamentals", True):
+        codes = {r["stock_id"]: r["market"] for tab in res["tabs"].values() for r in tab
+                 if r["asset_type"] == "common_stock"}
+        days = sorted(d for d in inp.daily["date"].unique() if d <= res["as_of_date"])
+        fundamentals, notes = collect_fundamentals(client, codes, days)
+    else:
+        notes.append("本次略過 EPS／營收／三大法人參考欄（skip_fundamentals）")
+    errors = [n for n in inp.notes if n.startswith("缺漏交易日")]
+    latest = build_latest(res, format_taipei_iso(now_taipei()), fundamentals, notes=notes, errors=errors)
+    paths = write_site_data(latest, out_dir)
+    print(f"完成：基準日 {latest['as_of_date']}，寫出 {', '.join(p.name for p in paths)}（請求 {len(client.logs)} 次）")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    ap = argparse.ArgumentParser(description="林恩如週 20MA 選股系統：產出 site/data/")
+    ap.add_argument("--out", default="site/data")
+    return run(ap.parse_args(argv).out)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

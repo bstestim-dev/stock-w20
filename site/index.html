@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>林恩如週 20MA 選股系統</title>
+<link rel="stylesheet" href="styles.css">
+<!-- TradingView Lightweight Charts（Apache-2.0），固定版本 4.1.1 -->
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+<header class="top">
+  <h1>林恩如週 20MA 選股系統</h1>
+  <div id="meta" class="meta">載入中…</div>
+  <div id="notes" class="notes" hidden></div>
+</header>
+
+<section id="market" class="market" aria-label="大盤紅綠燈"></section>
+
+<nav class="tabs" role="tablist" id="tabs">
+  <button role="tab" data-tab="new_cross" class="active">本週新站上週 20MA <span class="count"></span></button>
+  <button role="tab" data-tab="above_and_spike">已站上且本週爆量 <span class="count"></span></button>
+  <button role="tab" data-tab="etf">ETF 專頁 <span class="count"></span></button>
+  <button role="tab" data-tab="exit_alerts">跌破警戒／出場檢視 <span class="count"></span></button>
+</nav>
+
+<section class="controls" id="controls">
+  <label class="ctl">搜尋 <input type="search" id="q" placeholder="代號或名稱"></label>
+  <label class="ctl" data-for="stock">產業 <select id="industry"><option value="">全部</option></select></label>
+  <label class="ctl" data-for="stock"><input type="checkbox" id="spikeOnly"> 僅看同時爆量（≥<span id="spikeRatio">1.5</span>x）</label>
+  <label class="ctl" data-for="stock"><input type="checkbox" id="showFund"> 顯示 EPS・營收・法人參考欄</label>
+  <span class="ctl" data-for="etf" id="etfFilters">
+    子類型：
+    <label><input type="checkbox" value="equity_regular" checked> 原型股票/商品</label>
+    <label><input type="checkbox" value="active" checked> 主動式</label>
+    <label><input type="checkbox" value="bond"> 債券</label>
+    <label><input type="checkbox" value="leveraged_inverse"> 槓桿/反向</label>
+    <button type="button" id="etfAll">顯示全部子類型</button>
+  </span>
+  <label class="ctl" data-for="etf">區別
+    <select id="etfZone">
+      <option value="signal">兩區（有訊號）</option>
+      <option value="new_cross">新站上週 20MA</option>
+      <option value="above_and_spike">已站上且本週爆量</option>
+      <option value="all">全部 ETF</option>
+    </select>
+  </label>
+  <a class="ctl csv" id="csv" href="data/new_cross.csv" download>下載本分頁 CSV</a>
+  <a class="ctl csv" href="data/latest.json" download>下載 latest.json</a>
+</section>
+
+<main>
+  <div class="tablewrap"><table id="grid"><thead></thead><tbody></tbody></table></div>
+  <p id="empty" class="empty" hidden>本分頁目前沒有符合條件的標的。</p>
+</main>
+
+<footer class="foot">
+  <p>資料來源：臺灣證券交易所、證券櫃檯買賣中心公開資料（OpenAPI 與網站 JSON），產業／ETF 分類輔以 FinMind。價格為官方參考價向後還原，原始現價另列。</p>
+  <p>本頁為依公開規則計算之研究報告，不構成任何買賣建議；不提供資金、張數或停損價格。</p>
+  <p>圖表：<a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a> Lightweight Charts™。</p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -42,6 +42,16 @@ pytest
 產出 `dry_run_report/report.md` 與 `result.json`（artifact `m4-dry-run-report`），**不**部署 Pages、**不**寫入 `site/`。
 報告內含第 10.1 節第 3、4 項核對、跳空異常與事件對帳結果，以及族群、ETF 子類型、處置／注意的實測統計。本機可執行 `python -m tools.dry_run_m4 --out dry_run_report`。
 
+## 輸出與網頁（M5）
+
+- 產出：`python -m src.screener --out site/data`（讀 `config.yaml` 與 `SW20_*` 環境變數），寫出
+  `latest.json`、`latest.js`（同內容，供 file:// 直接開啟）與 4 份 UTF-8 BOM CSV（`new_cross`、`above_and_spike`、`etf`、`exit_alerts`）。
+  歷史資料缺漏超過第 9 節門檻時結束碼為 2，不寫出任何檔案。
+- 網頁：`site/index.html`＋`app.js`＋`styles.css`，純靜態、無 build；週 K 圖使用 TradingView Lightweight Charts 4.1.1（CDN，需連網）。
+- 預覽（M6 部署 Pages 之前）：Actions → `verify-api` → Run workflow → `mode = m5_preview`（`as_of_date` 可留白），
+  約 30～60 分鐘後在該次執行頁面下載 artifact `site-preview`，解壓後以 Chrome／Edge 直接開啟 `index.html`。
+- 本機：`python -m src.screener --out site/data` 後，`cd site && python -m http.server 8000`，瀏覽 http://localhost:8000/ ；或直接開啟 `site/index.html`。
+
 ## 進度
 
 | 里程碑 | 內容 | 狀態 |
@@ -49,7 +59,7 @@ pytest
 | M1 | 專案骨架、設定檔、時區與民國年工具 | 完成 |
 | M2 | TWSE／TPEx／FinMind 抓取器 | 完成（verify-api run1～run3；見 docs/api-verification.md） |
 | M3 | 還原價、真正週 K、指標、週結算判定 | 完成（verify-api run4；裁定 M3-Q1～Q7 見 docs/decisions.md） |
-| M4 | 選股引擎 | 完成（m4_dry_run run 45597664068；裁定 M4-Q1～Q12；待確認 M4b-Q1） |
-| M5 | 輸出與靜態網頁 | 未開始 |
+| M4 | 選股引擎 | 完成（m4_dry_run run 45597664068；裁定 M4-Q1～Q12、M4b-Q1） |
+| M5 | 輸出與靜態網頁 | 程式完成，待 m5_preview 預覽與待確認事項 |
 | M6 | GitHub Actions 與 Pages 部署 | 未開始 |
 | M7 | 第二階段回測 | 第一階段驗收後才開始 |
