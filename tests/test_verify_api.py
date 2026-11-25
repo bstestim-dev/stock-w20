@@ -77,7 +77,12 @@ def test_verify_run_and_render(tmp_path):
     assert items["TAIEX：MI_INDEX 收盤指數與 MI_5MINS_HIST 一致"][0] == "通過"
     assert items["短窗歷史流程（fetch_daily_history）"][0] == "通過"
     assert "2026-10-09(五)=non_trading" in items["短窗歷史流程（fetch_daily_history）"][1]
-    assert "驗證腳本未預期錯誤" not in items
+    assert "驗證腳本未預期錯誤" not in items, items.get("驗證腳本未預期錯誤")
+    m3 = [k for k in items if k.startswith("M3：")]
+    assert any("短週週 K 結算" in k for k in m3) and any("D4 週結算" in k for k in m3)
+    assert any("W20MA 與 D100MA" in k for k in m3) and any("還原連續性" in k for k in m3)
+    assert items["M3：2330 短週週 K 結算"][0] == "通過"
+    assert "M3：一年內還原事件衝突（同日多筆／防呆未過）" in items
     assert "TPEx「管理股票」表（D3：解析並標記）" in items
     assert items["解析器：TPEx parse_insti_net（取「三大法人買賣超股數合計」）"][0] == "通過"
     assert items["解析器：TPEx 櫃買指數 fetch_otc_index_month"][0] == "通過"

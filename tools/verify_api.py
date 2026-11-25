@@ -87,6 +87,8 @@ class Verifier:
         self.out = out_dir
         (self.out / "raw").mkdir(parents=True, exist_ok=True)
         self.results: list[dict[str, Any]] = []
+        self.twse_events: list[Any] = []   # 一年內 TWSE 公司事件（M3 還原抽樣用）
+        self.tpex_events: list[Any] = []   # 一年內 TPEx 公司事件（M3 衝突統計用）
         self.checks: list[tuple[str, str, str]] = []   # (項目, 結果, 說明)
         self.payloads: dict[str, Any] = {}
 
@@ -195,6 +197,7 @@ def run(v: Verifier, sample: date, window_end: date) -> None:
             if p is not None:
                 got = v.parse_check(label, lambda p=p: twse.parse_events(p, kind), lambda r: f"{len(r)} 筆")
                 events.extend(got or [])
+        v.twse_events.extend(events)
         codes = {ev.code for ev in events}
         watch = {"dividend": ["2330", "00939"]}.get(kind, [])  # 4763 事件日 2025-06-30（run2），不在一年窗內
         if watch:
@@ -265,6 +268,7 @@ def run(v: Verifier, sample: date, window_end: date) -> None:
             if p is not None:
                 got = v.parse_check(label, lambda p=p: tpex.parse_events(p, kind), lambda r: f"{len(r)} 筆")
                 events.extend(got or [])
+        v.tpex_events.extend(events)
         if kind == "dividend":
             v.check("TPEx exDailyQ 一年內含債券 ETF（規格例 00950B）", "00950B" in {e.code for e in events}, f"共 {len(events)} 筆")
 
@@ -342,6 +346,7 @@ def run(v: Verifier, sample: date, window_end: date) -> None:
         clients = [v.client]
         marks = [len(c.logs) for c in clients]
         t0 = time.monotonic()
+        res = None
         try:
             res = history.fetch_daily_history(v.client, end_d, lookback_weeks=3)
             lines = [f"{d.trade_date}({'一二三四五'[d.trade_date.weekday()]})={d.status}" for d in res.days]
@@ -355,11 +360,145 @@ def run(v: Verifier, sample: date, window_end: date) -> None:
             hl = [l.elapsed_sec for l in logs if host in l.url]
             per[host] = (len(hl), sum(hl) / len(hl) if hl else 0.0)
         days = max(per["twse.com.tw"][0], 1)
-        return wall, days, per
+        return wall, days, per, res
 
-    w1, n1, per1 = timed("短窗歷史流程（fetch_daily_history）", window_end)
+    w1, n1, per1, window_res = timed("短窗歷史流程（fetch_daily_history）", window_end)
     fmt = lambda per: "；".join(f"{h} {n} 次平均 {a:.2f} 秒" for h, (n, a) in per.items())
     v.check("耗時估算（逐日依序）", None, f"{n1} 個平日實耗 {w1:.0f} 秒（{fmt(per1)}）；300 個平日 ≈ {w1 / n1 * 300 / 60:.1f} 分鐘")
+
+    run_m3(v, sample, window_end, window_res, mi.get(sample))
+
+
+# ---------------------------------------------------------------- M3（第 10.1 節第 2 項）
+
+M3_SAMPLES = ("00939", "2330", "7780", "6949")   # 除息 ETF、權值股、面額變更（7780、6949 創新板；docs/decisions.md）
+
+
+def _month_start(d: date) -> date:
+    return d.replace(day=1)
+
+
+def _prev_month(d: date) -> date:
+    return (_month_start(d) - timedelta(days=1)).replace(day=1)
+
+
+def _stock_day_frame(v: Verifier, code: str, months: list[date], cache: dict) -> "Any":
+    import pandas as pd
+    rows = []
+    for m in months:
+        key = (code, m)
+        if key not in cache:
+            try:
+                cache[key] = twse.fetch_stock_day(v.client, m, code)
+            except Exception as exc:
+                v.check(f"M3：STOCK_DAY {code} {m:%Y-%m}", False, f"{type(exc).__name__}: {exc}"[:300])
+                cache[key] = []
+        rows += [{"date": r["date"], "code": code, "name": code, "market": "twse", "managed": False,
+                  "open": r["open"], "high": r["high"], "low": r["low"], "close": r["close"],
+                  "volume_shares": r["volume_shares"]} for r in cache[key]]
+    df = pd.DataFrame(rows)
+    return df.drop_duplicates("date").sort_values("date").reset_index(drop=True) if not df.empty else df
+
+
+def run_m3(v: Verifier, sample: date, window_end: date, window_res: Any, mi_sample: Any) -> None:
+    from src.adjustments import AdjustmentPlan, apply_plan, build_plan
+    from src.config import load_config
+    from src.indicators import stock_indicators, weekly_bars
+    from src.timezone import today_taipei
+    from src.trading_calendar import week_status
+
+    cfg, _ = load_config(env={})
+    cache: dict = {}
+
+    # 0) 一年內兩市事件的衝突統計（同日多筆不同事件、價格未通過防呆）→ 供待裁定 Q1、Q2
+    plan_all = build_plan(v.twse_events + v.tpex_events, sample - timedelta(days=365), sample)
+    v.check("M3：一年內還原事件衝突（同日多筆／防呆未過）", None,
+            f"事件 TWSE {len(v.twse_events)}、TPEx {len(v.tpex_events)} 筆；有因子代號 {len(plan_all.factors)}；"
+            f"衝突代號 {len(plan_all.conflicts)}：{json.dumps(plan_all.conflicts, ensure_ascii=False)[:1500]}")
+
+    # 1) 還原後事件前後連續（漲跌幅 10% 為推定上限，僅作判讀參考）
+    for code in M3_SAMPLES:
+        evs = sorted((e for e in v.twse_events if e.code == code), key=lambda e: e.event_date)
+        if not evs:
+            v.check(f"M3：{code} 還原連續性", None, "一年內 TWSE 事件表查無此代號")
+            continue
+        e = evs[-1]
+        df = _stock_day_frame(v, code, [_prev_month(e.event_date), _month_start(e.event_date)], cache)
+        if df.empty or e.event_date not in set(df["date"]):
+            v.check(f"M3：{code} 還原連續性", None, f"事件日 {e.event_date} 不在 STOCK_DAY 資料內")
+            continue
+        plan = build_plan(evs, df["date"].min() - timedelta(days=1), df["date"].max())
+        adj = apply_plan(df, plan)
+        i = adj.index[adj["date"] == e.event_date][0]
+        if i == 0:
+            v.check(f"M3：{code} 還原連續性", None, "事件日為資料第一天，無前一交易日")
+            continue
+        raw = adj.loc[i, "close"] / adj.loc[i - 1, "close"]
+        a = adj.loc[i, "close_adj"] / adj.loc[i - 1, "close_adj"]
+        v.check(f"M3：{code} 還原連續性（{e.kind} {e.event_date}）", abs(a - 1) <= 0.10,
+                f"P_before={e.p_before} P_ref={e.p_ref}；前一日→事件日 原始比 {raw:.4f}、還原比 {a:.4f}；"
+                f"前一日 cum_factor {adj.loc[i - 1, 'cum_factor']:.6f}；衝突 {plan.conflicts.get(code)}")
+
+    # 2) close_raw 與公開收盤價一致（MI_INDEX 樣本日 vs STOCK_DAY）
+    if mi_sample is not None and mi_sample.get("stat") == "OK":
+        m = twse.parse_mi_index(mi_sample, sample, prefilter=False)
+        mi_close = {q.code: q.close for q in m.quotes}
+        for code in M3_SAMPLES:
+            df = _stock_day_frame(v, code, [_month_start(sample)], cache)
+            sd = df[df["date"] == sample]["close"] if not df.empty else []
+            sd_close = float(sd.iloc[0]) if len(sd) else None
+            v.check(f"M3：{code} close_raw 與公開收盤價一致（{sample}）",
+                    None if code not in mi_close or sd_close is None else mi_close[code] == sd_close,
+                    f"MI_INDEX={mi_close.get(code)}；STOCK_DAY={sd_close}")
+
+    # 3) W20MA 與 D100MA 分欄、數值不同（2330，近 6 個月 STOCK_DAY）
+    months, m_ = [], _month_start(sample)
+    for _ in range(6):
+        months.insert(0, m_)
+        m_ = _prev_month(m_)
+    df = _stock_day_frame(v, "2330", months, cache)
+    if not df.empty:
+        evs = [e for e in v.twse_events if e.code == "2330"]
+        adj = apply_plan(df[df["date"] <= sample], build_plan(evs, df["date"].min() - timedelta(days=1), sample))
+        ws = week_status([], sample, sample, None)
+        ws.is_settled = True
+        r = stock_indicators(adj, ws, cfg)
+        v.check("M3：2330 W20MA 與 D100MA 分欄且不相等",
+                r["w20ma"] is not None and r["d100ma"] is not None and abs(r["w20ma"] - r["d100ma"]) > 1e-9,
+                f"週 K {r['bars']} 根；W20MA={r['w20ma']}；D100MA={r['d100ma']}；D20MA={r['d20ma']}；"
+                f"close_raw={r['close_raw']}；close_adj={r['close_adj']}；均差距={r['ma_diff']}；乖離率={r['bias_20w_pct']}")
+
+    # 4) 國定假日短週以該週最後交易日結算為 1 根週 K（短窗實際資料）
+    if window_res is not None:
+        quotes, _idx = history.history_to_frames(window_res)
+        trading = sorted(d.trade_date for d in window_res.trading_days)
+        expect = {}
+        for d in trading:
+            wk = d - timedelta(days=d.weekday())
+            expect.setdefault(wk, []).append(d)
+        for code in ("2330", "0050"):
+            sub = quotes[quotes["code"] == code]
+            bars, _s = weekly_bars(apply_plan(sub, AdjustmentPlan(window_res.start, window_res.as_of_date)))
+            got = {b["week_monday"]: (b["week_end_date"], b["valid_days"]) for _, b in bars.iterrows()}
+            ok = all(got.get(wk) == (ds[-1], len(ds)) for wk, ds in expect.items())
+            v.check(f"M3：{code} 短週週 K 結算", ok, "；".join(
+                f"{wk}週：結算 {got.get(wk, ('無',))[0]}／{got.get(wk, (None, 0))[1]} 日（市場 {ds[-1]}／{len(ds)} 日）"
+                for wk, ds in sorted(expect.items())))
+
+        # 5) D4 週結算判定（以短窗實際狀態與 FinMind 交易日表）
+        fm = finmind.FinMindClient(v.client)
+        try:
+            fm_dates = finmind.fetch_trading_dates(fm, window_res.start, window_end)
+        except Exception as exc:
+            fm_dates = None
+            v.check("M3：FinMind 交易日表（短窗）", False, f"{type(exc).__name__}: {exc}"[:300])
+        as_of = window_res.as_of_date
+        for label, today, dates in (("實際今日", today_taipei(), fm_dates), ("模擬今日＝休市當日", window_end, fm_dates),
+                                     ("模擬今日＝休市當日、無 FinMind", window_end, None)):
+            st = week_status(window_res.days, as_of, today, dates)
+            v.check(f"M3：D4 週結算（{label}）", None,
+                    f"as_of={as_of}；已結算={st.is_settled}；X={st.trading_days_elapsed}；"
+                    + "；".join(f"{r.day} {'確認' if r.confirmed_closed else '未確認'}（{r.reason}）" for r in st.remaining))
 
 
 # ---- 解析輔助（重用正式解析器，避免重複請求）

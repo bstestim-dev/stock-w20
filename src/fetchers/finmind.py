@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from src.fetchers.http import FetchError, HttpClient
@@ -109,3 +110,18 @@ def try_fetch_stock_info(client: FinMindClient) -> tuple[dict[str, dict[str, Any
         return latest_info_by_stock(client.fetch_stock_info()), None
     except (FetchError, SchemaMismatch, ValueError) as exc:
         return None, f"FinMind TaiwanStockInfo 不可用，改用規則過濾：{exc}"
+
+
+def fetch_trading_dates(client: FinMindClient, start: date, end: date) -> set[date]:
+    """TaiwanStockTradingDate（免 token）。run3 實測可回傳未來日期（含今日之後）。"""
+    rows = require_keys(client.fetch_dataset("TaiwanStockTradingDate", start_date=start.isoformat(), end_date=end.isoformat()),
+                        "FinMind TaiwanStockTradingDate", ("date",))
+    return {parse_iso_date(str(r["date"])) for r in rows}
+
+
+def try_fetch_trading_dates(client: FinMindClient, start: date, end: date) -> tuple[set[date] | None, str | None]:
+    """失敗回 (None, 訊息)；D4 週結算判定改為只用官方資料（當日不算確認休市）。"""
+    try:
+        return fetch_trading_dates(client, start, end), None
+    except (FetchError, SchemaMismatch, ValueError) as exc:
+        return None, f"FinMind TaiwanStockTradingDate 不可用，當日休市僅能於隔日確認：{exc}"
