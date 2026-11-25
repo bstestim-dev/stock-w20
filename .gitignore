@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# 機密：本機環境變數檔不得進版控
+.env
+.env.*
+
+# 抓取快取與回測快取
+cache/
+.cache/
+*.parquet
+
+# 執行產物由 GitHub Actions 部署到 Pages，不進版控
+site/data/*
+!site/data/.gitkeep

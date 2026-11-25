@@ -1,0 +1,59 @@
+# 林恩如週 20MA 選股系統 — 設定檔（依 spec_v1 v1.3 第 6.1 節）
+# 本檔為 Public repo 內容：MUST NOT 放入任何 token、金鑰或密碼。
+# FINMIND_TOKEN 只能放在 GitHub Secrets（本機則用環境變數）。
+# 標「定案鎖定」者由 src/config.py 驗證，改值會直接報錯（IR-2）。
+
+timezone: "Asia/Taipei"                  # 定案鎖定
+
+data_source:
+  primary: "official_twse_tpex"          # official_twse_tpex | finmind_adj
+  lookback_weeks: 60                     # 約 60 週 (~300 交易日)；2026-11-25 裁定 Q2（原 45），使週 K 圖 40 週皆有 W20MA 線
+  request_delay_sec: 0.7                 # 官方端點每次請求間隔（秒）
+  max_retries: 3
+  timeout_sec: 20
+  enable_optional_fundamentals: true     # 抓 EPS/月營收/三大法人供網頁收合參考欄
+
+universe:
+  min_paid_in_capital_ntd: 2000000000    # 嚴格大於 20 億（定案鎖定）
+  min_avg_daily_lots_20w: 1000           # 前 20 週平均週量 ÷ 5 >= 1,000 張 (設 0 關閉)（已確認）
+  include_tib: true                      # 創新板（TIB）只要股本 > 20 億即納入（定案鎖定）
+  exclude_dr: true                       # 定案鎖定
+  exclude_preferred: true                # 定案鎖定
+  exclude_etn: true                      # 定案鎖定
+  exclude_warrants: true                 # 定案鎖定
+  etf_min_avg_daily_lots_20w: 0          # ETF 頁不設流動性硬門檻（定案鎖定）
+
+screening:
+  ma_weeks: 20
+  vol_lookback_weeks: 20
+  volume_spike_ratio: 1.5                # 當週量 >= 前 20 週均量 * 1.5；頁 2 門檻亦跟此值（2026-11-25 裁定 Q3）
+  require_volume_spike_on_new_cross: false  # 頁 1 不硬卡爆量，只標示並可勾選過濾（定案鎖定）
+  midweek_volume_basis: "actual"         # 週中以實際累計量判定（定案鎖定）
+  midweek_show_projected_ratio: true     # 另附推算滿週倍數，不作為篩選基準
+  bias_warning_pct: 15.0                 # 僅標示警示，不硬剔除
+  pivot_k_weeks: 2                       # S3/S4 擺盪高低點左右各 k 週
+  trendline_max_angle_deg: 40            # 僅原文參考，不參與計算（原文「不要太陡，40 度為參考」屬看圖目測；2026-11-25 裁定）
+  trendline_min_pivot_gap_weeks: 8       # S3 切線兩高點最少間隔週數 Δt；不足不給切線分（2026-11-25 S3 裁定；回測掃 8～13）
+  # 「切線偏陡」警示門檻：對數價格每週變化率 r = (lnP1 − lnP2) / Δt 超過此值即標警示，不影響得分。
+  # null = 關閉（預設）；數值待回測校正後再定。
+  trendline_steep_warning_log_rate: null
+
+ui:
+  etf_default_hide_subtypes: ["bond", "leveraged_inverse"]  # ETF 頁預設隱藏債券與槓反（已確認）
+
+market_timing:
+  d_short: 20
+  d_long: 100
+  w_ma: 20
+  hard_filter_on_green: false            # 定案：綠燈不硬過濾（定案鎖定）
+
+backtest:
+  primary_data: "official_twse_tpex_local_cache"  # 官方資料 + 本機快取（已確認）；finmind_adj 為選用
+  start_date: "2021-01-01"
+  end_date: "2026-11-25"
+  fee_rate: 0.001425
+  fee_discount: 0.6
+  tax_rate_stock: 0.003
+  tax_rate_etf: 0.001
+  slippage: 0.0015
+  max_positions: 5
