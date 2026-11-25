@@ -31,12 +31,17 @@ pytest
 
 執行參數可用環境變數覆寫（對應 workflow 輸入）：`SW20_AS_OF_DATE`（`YYYY-MM-DD`）、`SW20_LOOKBACK_WEEKS`、`SW20_VOLUME_SPIKE_RATIO`、`SW20_SKIP_FUNDAMENTALS`（`true`／`false`）。
 
+## API 實測驗證（M2）
+
+`.github/workflows/verify-api.yml` 僅能手動觸發（Actions → verify-api → Run workflow），不使用任何 Secrets。
+會對規格第 3 節端點發出真實請求，產出 `verify_report/report.md`（同時顯示於該次執行的 Summary 頁並上傳為 artifact）。
+
 ## 進度
 
 | 里程碑 | 內容 | 狀態 |
 | :--- | :--- | :--- |
-| M1 | 專案骨架、設定檔、時區與民國年工具 | 完成，待確認 |
-| M2 | TWSE／TPEx／FinMind 抓取器 | 未開始 |
+| M1 | 專案骨架、設定檔、時區與民國年工具 | 完成 |
+| M2 | TWSE／TPEx／FinMind 抓取器 | 程式完成，待 API 實測（verify-api workflow） |
 | M3 | 還原價、真正週 K、指標 | 未開始 |
 | M4 | 選股引擎 | 未開始 |
 | M5 | 輸出與靜態網頁 | 未開始 |

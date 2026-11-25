@@ -1,0 +1,47 @@
+# M2 API 實測驗證（2026-11-25 裁定 (c)）：僅限手動觸發，不含 schedule，不使用任何 Secrets。
+name: verify-api
+
+on:
+  workflow_dispatch:
+    inputs:
+      sample_date:
+        description: "樣本交易日 YYYY-MM-DD（Asia/Taipei）"
+        required: false
+        default: "2026-11-20"
+      window_end:
+        description: "短窗歷史測試終點 YYYY-MM-DD（往前約 3 週）"
+        required: false
+        default: "2026-10-09"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TZ: Asia/Taipei
+      # 以環境變數傳入，避免把輸入值直接展開在 shell 指令中
+      VERIFY_SAMPLE_DATE: ${{ inputs.sample_date }}
+      VERIFY_WINDOW_END: ${{ inputs.window_end }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 安裝套件
+        run: pip install -r requirements.txt
+      - name: 單元測試
+        run: pytest -q
+      - name: API 實測
+        run: python -m tools.verify_api --out verify_report
+      - name: 上傳報告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-api-report
+          path: verify_report/
+          retention-days: 14
