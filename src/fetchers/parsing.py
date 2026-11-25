@@ -14,8 +14,9 @@ from typing import Any
 
 from src.timezone import parse_roc_date, parse_western_slash_date
 
-# 規格第 3 節記載的「無成交價」佔位字串
-NO_PRICE_TOKENS = frozenset({"", "--", "----"})
+# 「無成交價」佔位字串：規格第 3 節記載 "--"、"----"；
+# "---" 為 2026-11-25 verify-api run1 實測 TPEx dailyQuotes 所見（開高低收四欄同時出現，前後空白已先去除）。
+NO_PRICE_TOKENS = frozenset({"", "--", "---", "----"})
 # TWSE 無資料訊息（非交易日或查無事件），spec 3.2B 記載全文為「很抱歉，沒有符合條件的資料!」
 TWSE_NO_DATA_MARKER = "沒有符合條件的資料"
 
@@ -118,21 +119,42 @@ def find_table(payload: Mapping[str, Any], endpoint: str, title_keyword: str | N
 
 
 def table_rows(table: Mapping[str, Any], endpoint: str, required: Sequence[str]) -> list[dict[str, Any]]:
-    """將 fields／data 轉成 dict 列；必要欄位缺漏即拋 SchemaMismatch。"""
+    """將 fields／data 轉成 dict 列；必要欄位缺漏即拋 SchemaMismatch。
+
+    欄名重複時（例：TPEx insti/dailyTrade 的「買進股數」出現 7 次），重複欄不放入 dict，
+    以免後欄覆蓋前欄；必要欄位若屬重複欄名，同樣拋 SchemaMismatch（不以位置猜測）。
+    """
     fields = table.get("fields")
     if not isinstance(fields, list):
         raise SchemaMismatch(endpoint, "fields 不是陣列", fields)
     names = [str(f).strip() for f in fields]
-    missing = [r for r in required if r not in names]
+    counts: dict[str, int] = {}
+    for n in names:
+        counts[n] = counts.get(n, 0) + 1
+    missing = [r for r in required if r not in counts]
     if missing:
         raise SchemaMismatch(endpoint, f"缺少必要欄位 {missing}", names)
+    ambiguous = [r for r in required if counts[r] > 1]
+    if ambiguous:
+        raise SchemaMismatch(endpoint, f"必要欄位名稱重複，無法依名稱對應 {ambiguous}", names)
+    unique = [(i, n) for i, n in enumerate(names) if counts[n] == 1]
     data = table.get("data") or []
     rows = []
     for row in data:
         if not isinstance(row, list):
             raise SchemaMismatch(endpoint, "data 列不是陣列", row)
-        rows.append({name: (row[i] if i < len(row) else None) for i, name in enumerate(names)})
+        rows.append({n: (row[i] if i < len(row) else None) for i, n in unique})
     return rows
+
+
+def check_response_date(payload: Mapping[str, Any], endpoint: str, expected: date) -> None:
+    """確認回應頂層 ``date``（YYYYMMDD）等於查詢日，避免把別天資料當成查詢日（run1 實測兩端點皆回傳此鍵）。"""
+    actual = payload.get("date")
+    want = expected.strftime("%Y%m%d")
+    if actual is None:
+        raise SchemaMismatch(endpoint, f"回應缺少 date 鍵，無法確認是否為 {want} 的資料", list(payload)[:20])
+    if str(actual).strip() != want:
+        raise SchemaMismatch(endpoint, f"回應日期 {actual!r} 與查詢日 {want} 不一致")
 
 
 def require_keys(records: Iterable[Mapping[str, Any]], endpoint: str, required: Sequence[str]) -> list[dict[str, Any]]:

@@ -82,8 +82,9 @@ def summarize(payload: Any) -> dict[str, Any]:
 
 
 class Verifier:
-    def __init__(self, client: HttpClient, out_dir: Path):
+    def __init__(self, client: HttpClient, out_dir: Path, client_factory: Callable[[], Any] = HttpClient):
         self.client = client
+        self.client_factory = client_factory  # 並行模式的第二個（TPEx 專用）client
         self.out = out_dir
         (self.out / "raw").mkdir(parents=True, exist_ok=True)
         self.results: list[dict[str, Any]] = []
@@ -139,6 +140,11 @@ def run(v: Verifier, sample: date, window_end: date) -> None:
     v.parse_check("TWSE t187ap03_L", lambda: twse.require_keys(v.payloads["TWSE OpenAPI /opendata/t187ap03_L"], "t187ap03_L",
         ("公司代號", "公司簡稱", "產業別", "普通股每股面額", "實收資本額", "特別股", "已發行普通股數或TDR原股發行股數")),
         lambda r: f"{len(r)} 筆；產業別=91 共 {sum(1 for x in r if str(x['產業別']).strip() == '91')} 筆")
+    hol = v.payloads.get("TWSE OpenAPI /holidaySchedule/holidaySchedule")
+    if isinstance(hol, list):
+        years = Counter(str(r.get("Date", ""))[:3] for r in hol)
+        v.check("run2：TWSE 休市表涵蓋年度（民國年前 3 碼）", None,
+                f"{dict(years)}；全部：" + "、".join(f"{r.get('Date')} {r.get('Name')}" for r in hol))
     v.parse_check("TWSE notice（濾空殼）", lambda: [r for r in v.payloads["TWSE OpenAPI /announcement/notice"] if str(r.get("Code", "")).strip()],
         lambda r: f"{len(r)} 筆有效")
 
@@ -222,6 +228,17 @@ def run(v: Verifier, sample: date, window_end: date) -> None:
                 lambda m: f"交易日={m.is_trading}；預篩後 {len(m.quotes)} 檔；無法解析值 {len(m.report.anomalies)} "
                           f"{Counter((a.field, a.raw) for a in m.report.anomalies).most_common(5) if m.report.anomalies else ''}")
 
+    if dq.get(sample) is not None:
+        try:
+            m = tpex.parse_daily_quotes(dq[sample], sample, prefilter=True)
+            no_px = [(q.code, q.name, q.volume_shares) for q in m.quotes if q.close is None]
+            v.check("run2：TPEx 無收盤價列（含 '---'）之成交股數", all((x[2] or 0) == 0 for x in no_px),
+                    f"{len(no_px)} 檔：{no_px[:20]}")
+            mgmt = next((t for t in extract_tables(dq[sample]) if t.get("title") == "管理股票"), None)
+            v.check("run2：TPEx dailyQuotes「管理股票」表列數", None, f"{len(mgmt.get('data') or []) if mgmt else '無此表'}")
+        except Exception as exc:
+            v.check("run2：TPEx 無收盤價列", False, f"{type(exc).__name__}: {exc}"[:300])
+
     ts = v.probe("TPEx tradingStock 6488", f"{tpex.WWW}/afterTrading/tradingStock", {"date": s_tpex, "code": "6488", "response": "json"})
     if ts is not None and dq.get(sample) is not None:
         ts_rows = v.parse_check("tradingStock 6488", lambda: _parse_trading_stock(ts), lambda r: f"{len(r)} 日；日期樣本 {r[0]['date'] if r else None}")
@@ -236,6 +253,8 @@ def run(v: Verifier, sample: date, window_end: date) -> None:
                 None if ratio is None else abs(ratio - 1) < 0.001, f"dailyQuotes={a} 股；tradingStock 換算={b} 股；比值={ratio}")
 
     v.probe("TPEx indexInfo/inx", f"{tpex.WWW}/indexInfo/inx", {"date": s_tpex, "response": "json"})
+    v.parse_check("TPEx 櫃買指數 fetch_otc_index_month", lambda: tpex.fetch_otc_index_month(v.client, sample),
+                  lambda r: f"{len(r)} 日；首筆 {r[0] if r else None}")
 
     for kind, spec in tpex._EVENT_SPECS.items():
         events = []
@@ -252,13 +271,34 @@ def run(v: Verifier, sample: date, window_end: date) -> None:
     insti = v.probe("TPEx insti/dailyTrade（Q4 欄位）", f"{tpex.WWW}/insti/dailyTrade",
                     {"type": "Daily", "sect": "EW", "date": s_tpex, "response": "json"})
     if insti is not None:
-        for t in extract_tables(insti):
-            v.check("Q4：TPEx 三大法人完整欄位", None, json.dumps({"title": t.get("title"), "fields": t.get("fields"),
-                    "rows": len(t.get("data") or []), "sample": (t.get("data") or [])[:3]}, ensure_ascii=False)[:3000])
+        net = v.parse_check("TPEx parse_insti_net（取「三大法人買賣超股數合計」）", lambda: tpex.parse_insti_net(insti, sample),
+                            lambda r: f"{len(r)} 檔；6488={r.get('6488')}")
+        t0 = next((t for t in extract_tables(insti) if t.get("fields")), None)
+        if t0:
+            from src.fetchers.parsing import parse_number
+            ok = bad = 0
+            bad_rows = []
+            for row in t0.get("data") or []:
+                try:
+                    g = lambda k: parse_number(row[2 + 3 * (k - 1) + 2])
+                    if g(3) + g(4) + g(7) == parse_number(row[-1]):
+                        ok += 1
+                    else:
+                        bad += 1
+                        bad_rows.append(row[0])
+                except Exception:
+                    bad += 1
+                    bad_rows.append(row[0])
+            v.check("run2：法人欄位關係（第3+4+7組買賣超＝合計，僅佐證不用於取值）", bad == 0,
+                    f"符合 {ok} 列、不符 {bad} 列 {bad_rows[:10]}")
 
     # ---- FinMind（免 token）
     info = v.probe("FinMind TaiwanStockInfo", finmind.BASE, {"dataset": "TaiwanStockInfo"})
     if info is not None:
+        st = finmind.undated_stats(info["data"])
+        v.check("run2：FinMind TaiwanStockInfo date 為 null 的列", None,
+                f"null 列 {st['null_rows']}；僅有 null 列的代號 {len(st['stock_ids_only_null'])} 檔 {st['stock_ids_only_null'][:30]}；"
+                f"樣本 {json.dumps(st['samples'], ensure_ascii=False)[:1500]}")
         recs = v.parse_check("FinMind TaiwanStockInfo", lambda: finmind.latest_info_by_stock(
             finmind.require_keys(info["data"], "TaiwanStockInfo", finmind.STOCK_INFO_KEYS)), lambda r: f"{len(r)} 檔（取最新 date 後）")
         if recs:
@@ -272,21 +312,42 @@ def run(v: Verifier, sample: date, window_end: date) -> None:
         weekend = [r.get("date") for r in tdays["data"] if _is_weekend(r.get("date"))]
         v.check("週末無交易日（不請求週末之依據）", not weekend, f"2024-01-01 起 {len(tdays['data'])} 個交易日，週末交易日 {weekend[:10]}")
 
-    # ---- 短窗歷史流程實測（含非交易日判定）
-    hist_client = v.client
-    n_before = len(hist_client.logs)
-    try:
-        res = history.fetch_daily_history(hist_client, window_end, lookback_weeks=3)
-        lines = [f"{d.trade_date}({'一二三四五'[d.trade_date.weekday()]})={d.status}" for d in res.days]
-        v.check("短窗歷史流程（fetch_daily_history）", True,
-                f"as_of={res.as_of_date}；缺漏={res.missing}；notes={res.notes}；" + "、".join(lines))
-    except Exception as exc:
-        v.check("短窗歷史流程（fetch_daily_history）", False, f"{type(exc).__name__}: {exc}"[:800])
-    window_logs = hist_client.logs[n_before:]
-    if window_logs:
-        avg = sum(l.elapsed_sec for l in window_logs) / len(window_logs)
-        est_min = avg * 600 / 60  # 60 週 × 5 日 × 2 市場 ≈ 600 次
-        v.check("耗時估算", None, f"短窗 {len(window_logs)} 次請求平均 {avg:.2f} 秒（含間隔）；60 週約 600 次 ≈ {est_min:.1f} 分鐘")
+    # ---- run2：4763 面額變更往前回溯（規格例；run1 一年內未見）
+    hits = []
+    for s_, e_ in date_chunks(date(2023, 1, 1), sample - timedelta(days=365), 90):
+        try:
+            hits += [ev for ev in twse.fetch_events(v.client, "par_value_change", s_, e_) if ev.code == "4763"]
+        except Exception as exc:
+            v.check(f"run2：TWTB8U {s_}～{e_}", False, f"{type(exc).__name__}: {exc}"[:300])
+    v.check("run2：TWTB8U 2023-01-01 起是否含 4763", bool(hits) or None,
+            str([(h.event_date.isoformat(), h.p_before, h.p_ref) for h in hits]) or "2023 年以來查無")
+
+    # ---- 短窗歷史流程實測（含非交易日判定）：逐日依序 vs 分主機並行
+    def timed(label, end_d, **kw):
+        clients = [v.client] + ([kw["tpex_client"]] if kw.get("tpex_client") else [])
+        marks = [len(c.logs) for c in clients]
+        t0 = time.monotonic()
+        try:
+            res = history.fetch_daily_history(v.client, end_d, lookback_weeks=3, **kw)
+            lines = [f"{d.trade_date}({'一二三四五'[d.trade_date.weekday()]})={d.status}" for d in res.days]
+            v.check(label, True, f"as_of={res.as_of_date}；缺漏={res.missing}；notes={res.notes}；" + "、".join(lines))
+        except Exception as exc:
+            v.check(label, False, f"{type(exc).__name__}: {exc}"[:800])
+        wall = time.monotonic() - t0
+        logs = [l for c, m in zip(clients, marks) for l in c.logs[m:]]
+        per = {}
+        for host in ("twse.com.tw", "tpex.org.tw"):
+            hl = [l.elapsed_sec for l in logs if host in l.url]
+            per[host] = (len(hl), sum(hl) / len(hl) if hl else 0.0)
+        days = max(per["twse.com.tw"][0], 1)
+        return wall, days, per
+
+    w1, n1, per1 = timed("短窗歷史流程（fetch_daily_history）", window_end)
+    w2, n2, per2 = timed("run2：短窗歷史流程（分主機並行）", window_end - timedelta(days=21),
+                         parallel_hosts=True, tpex_client=v.client_factory())
+    fmt = lambda per: "；".join(f"{h} {n} 次平均 {a:.2f} 秒" for h, (n, a) in per.items())
+    v.check("耗時估算（逐日依序）", None, f"{n1} 個平日實耗 {w1:.0f} 秒（{fmt(per1)}）；300 個平日 ≈ {w1 / n1 * 300 / 60:.1f} 分鐘")
+    v.check("run2：耗時估算（分主機並行）", None, f"{n2} 個平日實耗 {w2:.0f} 秒（{fmt(per2)}）；300 個平日 ≈ {w2 / n2 * 300 / 60:.1f} 分鐘")
 
 
 # ---- 解析輔助（重用正式解析器，避免重複請求）

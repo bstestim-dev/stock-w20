@@ -3,7 +3,8 @@
 - 第一階段僅用免 Token 的 ``TaiwanStockInfo``（分類輔助）；斷線時由呼叫端降級（第 9 節）。
 - 選配 ``FINMIND_TOKEN``（Backer 以上）只從環境變數取得，以 ``Authorization: Bearer`` 標頭送出，
   不放網址、不寫入日誌。付費資料集（如 ``TaiwanStockPriceAdj``）於本里程碑僅保留 ``fetch_dataset`` 介面。
-- 回應外層結構（資料放在 ``data`` 鍵）規格未明載，待 API 驗證確認；不符即拋 SchemaMismatch。
+- 回應外層結構經 2026-11-25 verify-api run1 確認為 ``{"msg", "status", "data"}``（status 200、msg "success"）。
+- ``TaiwanStockInfo`` 部分列的 ``date`` 為 null（run1 實測）。處理方式待 Hector 裁定（見 latest_info_by_stock）。
 """
 
 from __future__ import annotations
@@ -37,6 +38,8 @@ class FinMindClient:
         if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
             actual = list(payload) if isinstance(payload, dict) else type(payload).__name__
             raise SchemaMismatch(endpoint, "外層未見 data 陣列", actual)
+        if payload.get("status") != 200:
+            raise SchemaMismatch(endpoint, f"status={payload.get('status')!r} msg={payload.get('msg')!r}")
         return payload["data"]
 
     def fetch_stock_info(self) -> list[dict[str, Any]]:
@@ -44,15 +47,34 @@ class FinMindClient:
 
 
 def latest_info_by_stock(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """同一 stock_id 取 ``date`` 最新的一列（避免誤取已轉上市櫃的舊 emerging 列；spec 3.4B）。"""
-    latest: dict[str, dict[str, Any]] = {}
+    """同一 stock_id 取 ``date`` 最新的一列（避免誤取已轉上市櫃的舊 emerging 列；spec 3.4B）。
+
+    【暫行處理，待 Hector 裁定】``date`` 為 null 的列：同代號有具日期的列時不採用；
+    只有 null 列時才採用，並標 ``_date = None``、``_date_unknown = True``。
+    非 null 但格式不是 YYYY-MM-DD 者，照舊拋 ValueError（不猜測）。
+    """
+    dated: dict[str, dict[str, Any]] = {}
+    undated: dict[str, dict[str, Any]] = {}
     for rec in records:
         sid = str(rec["stock_id"]).strip()
-        d = parse_iso_date(str(rec["date"]))
-        cur = latest.get(sid)
+        raw = rec.get("date")
+        if raw is None or str(raw).strip() == "":
+            undated.setdefault(sid, {**rec, "_date": None, "_date_unknown": True})
+            continue
+        d = parse_iso_date(str(raw))
+        cur = dated.get(sid)
         if cur is None or d > cur["_date"]:
-            latest[sid] = {**rec, "_date": d}
-    return latest
+            dated[sid] = {**rec, "_date": d, "_date_unknown": False}
+    return {**{k: v for k, v in undated.items() if k not in dated}, **dated}
+
+
+def undated_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """統計 date 為 null 的列（供 verify-api 回報範圍）。"""
+    is_null = [r.get("date") is None or str(r.get("date")).strip() == "" for r in records]
+    null_rows = [r for r, n in zip(records, is_null) if n]
+    dated_ids = {str(r["stock_id"]).strip() for r, n in zip(records, is_null) if not n}
+    only_null = sorted({str(r["stock_id"]).strip() for r in null_rows} - dated_ids)
+    return {"null_rows": len(null_rows), "stock_ids_only_null": only_null, "samples": null_rows[:10]}
 
 
 def try_fetch_stock_info(client: FinMindClient) -> tuple[dict[str, dict[str, Any]] | None, str | None]:

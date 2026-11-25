@@ -139,3 +139,27 @@ def test_history_to_frames(monkeypatch):
     quotes, idx = history.history_to_frames(res)
     assert len(quotes) == 10 and set(quotes["market"]) == {"twse", "tpex"}
     assert list(idx["close"].unique()) == [23000.0] and len(idx) == 5
+
+
+def test_parallel_hosts_gives_same_result_and_needs_separate_client(monkeypatch):
+    install(monkeypatch, normal, normal)
+    seq = history.fetch_daily_history(None, date(2026, 10, 16), lookback_weeks=2, today=TODAY)
+
+    class C:  # 兩個不同物件即可（fetch 已被 monkeypatch）
+        pass
+
+    a, b = C(), C()
+    par = history.fetch_daily_history(a, date(2026, 10, 16), lookback_weeks=2, today=TODAY,
+                                      parallel_hosts=True, tpex_client=b)
+    assert [(d.trade_date, d.status) for d in par.days] == [(d.trade_date, d.status) for d in seq.days]
+    with pytest.raises(ValueError, match="tpex_client"):
+        history.fetch_daily_history(a, date(2026, 10, 16), lookback_weeks=2, today=TODAY, parallel_hosts=True)
+
+
+def test_parallel_hosts_uses_each_client_for_its_host(monkeypatch):
+    seen = []
+    monkeypatch.setattr(twse, "fetch_mi_index", lambda c, d: seen.append(("twse", c)) or market("twse", d))
+    monkeypatch.setattr(tpex, "fetch_daily_quotes", lambda c, d: seen.append(("tpex", c)) or market("tpex", d))
+    history.fetch_daily_history("A", date(2026, 11, 20), lookback_weeks=1, today=TODAY,
+                                parallel_hosts=True, tpex_client="B")
+    assert {c for m, c in seen if m == "twse"} == {"A"} and {c for m, c in seen if m == "tpex"} == {"B"}

@@ -8,9 +8,10 @@ def mi_row(code, name, shares, value, o, h, l, c):
     return [code, name, shares, "1", value, o, h, l, c, "+", "0.00", "", "", "", "", ""]
 
 
-def mi_index_payload(rows=None):
+def mi_index_payload(rows=None, date="20261120"):
     return {
         "stat": "OK",
+        "date": date,
         "tables": [
             {"title": "115年11月20日 價格指數(臺灣證券交易所)",
              "fields": ["指數", "收盤指數", "漲跌(+/-)", "漲跌點數", "漲跌百分比(%)", "特殊處理註記"],
@@ -42,9 +43,10 @@ def dq_row(code, name, close, o, h, l, shares, value):
     return [code, name, close, "+0.10", o, h, l, close, shares, value, "1", "", "", "", "", "", "", "", ""]
 
 
-def daily_quotes_payload(rows=None):
+def daily_quotes_payload(rows=None, date="20261120"):
     return {
         "stat": "ok",
+        "date": date,
         "tables": [{
             "title": "上櫃股票行情",
             "fields": list(DAILY_QUOTES_FIELDS),
@@ -58,7 +60,7 @@ def daily_quotes_payload(rows=None):
     }
 
 
-TPEX_NO_DATA = {"stat": "ok", "tables": [{"title": "上櫃股票行情", "fields": list(DAILY_QUOTES_FIELDS), "data": []}]}
+TPEX_NO_DATA = {"stat": "ok", "date": "20261120", "tables": [{"title": "上櫃股票行情", "fields": list(DAILY_QUOTES_FIELDS), "data": []}]}
 
 TWT49U_PAYLOAD = {
     "stat": "OK",
@@ -94,3 +96,23 @@ T86_PAYLOAD = {
     "fields": ["證券代號", "證券名稱", "外陸資買賣超股數(不含外資自營商)", "投信買賣超股數", "自營商買賣超股數", "三大法人買賣超股數"],
     "data": [["2330", "台積電", "1,000,000", "200,000", "-50,000", "1,150,000"]],
 }
+
+
+# run1 實測（2026-11-20）insti/dailyTrade 前 3 列，欄名照實際回應（含重複欄名）
+INSTI_FIELDS = (["代號", "名稱"] + ["買進股數", "賣出股數", "買賣超股數"] * 7 + ["三大法人買賣超股數合計"])
+INSTI_PAYLOAD = {
+    "stat": "ok", "date": "20261120",
+    "tables": [
+        {"title": "三大法人買賣明細資訊", "fields": list(INSTI_FIELDS), "data": [
+            ["00411A", "主動統一前沿科技", "3,077,000", "307,000", "2,770,000", "0", "0", "0", "3,077,000", "307,000", "2,770,000", "0", "0", "0", "0", "0", "0", "7,640,000", "1,003,165", "6,636,835", "7,640,000", "1,003,165", "6,636,835", "9,406,835"],
+            ["006201", "元大富櫃50", "14,000", "4,000", "10,000", "0", "0", "0", "14,000", "4,000", "10,000", "0", "0", "0", "0", "0", "0", "139,000", "854,724", "-715,724", "139,000", "854,724", "-715,724", "-705,724"],
+            ["00679B", "元大美債20年", "9,753,000", "1,803,000", "7,950,000", "0", "0", "0", "9,753,000", "1,803,000", "7,950,000", "0", "0", "0", "0", "130,000", "-130,000", "39,890,060", "1,974,769", "37,915,291", "39,890,060", "2,104,769", "37,785,291", "45,735,291"],
+        ]},
+        {"title": None, "fields": None, "data": []},
+    ],
+}
+
+# run1 實測 indexInfo/inx 結構
+INX_PAYLOAD = {"stat": "ok", "date": "20261120", "tables": [{"title": "櫃買指數(月查詢)",
+    "fields": ["日期", "開市", "最高", "最低", "收市", "漲/跌"],
+    "data": [["2026/11/02", "368.22", "373.28", "362.18", "369.24", "-1.02"]]}]}

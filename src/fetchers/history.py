@@ -6,7 +6,10 @@
 - ``as_of_date`` 取兩市「皆有完整資料」之最近共同交易日；其後的缺漏（例如盤後資料尚未入庫）
   不計入缺漏比例，但記入 notes 於報告頂部提示。
 - 缺漏連續超過 3 個平日，或缺漏比例 > 5%，拋 ``HistoryIncomplete``（workflow 以非 0 結束，不發佈錯誤報告）。
-- 週末不請求（台股週末不開市）；此假設由 API 驗證 workflow 以 FinMind TaiwanStockTradingDate 交叉檢查。
+- 週末不請求（台股週末不開市）；2026-11-25 verify-api run1 以 FinMind TaiwanStockTradingDate
+  交叉檢查 2024-01-01 起 698 個交易日，無週末交易日。
+- ``parallel_hosts=True``（預設關閉，待 Hector 依 run2 耗時裁定）：TWSE 與 TPEx 各用一個執行緒與各自的
+  HttpClient，各主機仍維持自己的請求間隔與退避；不會對同一主機同時發出兩個請求。
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from __future__ import annotations
 import gzip
 import json
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
@@ -120,19 +124,29 @@ def weekdays_between(start: date, end: date) -> list[date]:
     return out
 
 
-def fetch_day(client: HttpClient, d: date) -> DayResult:
+_RECOVERABLE = (FetchError, ApiStatusError, SchemaMismatch, ValueError)
+
+
+def _fetch_one(name: str, client: HttpClient, d: date) -> DailyMarket | str:
+    fn = twse.fetch_mi_index if name == "TWSE" else tpex.fetch_daily_quotes
+    try:
+        return fn(client, d)
+    except _RECOVERABLE as exc:
+        return f"{name} {d}：{exc}"
+
+
+def _combine(d: date, tw: DailyMarket | str, tp: DailyMarket | str) -> DayResult:
     result = DayResult(d, None, None)
-    for name, fn in (("TWSE", twse.fetch_mi_index), ("TPEx", tpex.fetch_daily_quotes)):
-        try:
-            market = fn(client, d)
-        except (FetchError, ApiStatusError, SchemaMismatch, ValueError) as exc:
-            result.errors.append(f"{name} {d}：{exc}")
-            continue
-        if name == "TWSE":
-            result.twse = market
+    for value, attr in ((tw, "twse"), (tp, "tpex")):
+        if isinstance(value, str):
+            result.errors.append(value)
         else:
-            result.tpex = market
+            setattr(result, attr, value)
     return result
+
+
+def fetch_day(client: HttpClient, d: date) -> DayResult:
+    return _combine(d, _fetch_one("TWSE", client, d), _fetch_one("TPEx", client, d))
 
 
 def evaluate_missing(days: list[DayResult], as_of: date) -> list[tuple[date, str]]:
@@ -171,18 +185,35 @@ def fetch_daily_history(
     cache: DayCache | None = None,
     today: date | None = None,
     progress: Callable[[DayResult], None] | None = None,
+    parallel_hosts: bool = False,
+    tpex_client: HttpClient | None = None,
 ) -> HistoryResult:
     today = today or today_taipei()
     end = min(end, today)
     start = week_monday(end) - timedelta(weeks=lookback_weeks - 1)
+    weekdays = weekdays_between(start, end)
+
+    cached = {d: r for d in weekdays if cache and (r := cache.get(d)) is not None}
+    todo = [d for d in weekdays if d not in cached]
+
+    fetched: dict[date, DayResult] = {}
+    if parallel_hosts and todo:
+        if tpex_client is None or tpex_client is client:
+            raise ValueError("parallel_hosts=True 時須另給 tpex_client（各主機獨立節流）")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            tw_future = pool.submit(lambda: [_fetch_one("TWSE", client, d) for d in todo])
+            tp_future = pool.submit(lambda: [_fetch_one("TPEx", tpex_client, d) for d in todo])
+            for d, tw, tp in zip(todo, tw_future.result(), tp_future.result()):
+                fetched[d] = _combine(d, tw, tp)
+    else:
+        for d in todo:
+            fetched[d] = fetch_day(client, d)
 
     days: list[DayResult] = []
-    for d in weekdays_between(start, end):
-        result = cache.get(d) if cache else None
-        if result is None:
-            result = fetch_day(client, d)
-            if cache:
-                cache.put(result, today)
+    for d in weekdays:
+        result = cached.get(d) or fetched[d]
+        if cache and d in fetched:
+            cache.put(result, today)
         days.append(result)
         if progress:
             progress(result)

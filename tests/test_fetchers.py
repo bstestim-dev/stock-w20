@@ -229,7 +229,7 @@ def test_finmind_latest_row_per_stock_and_token_header():
 
 
 def test_finmind_without_token_sends_no_auth():
-    c = StubClient({"finmindtrade": {"data": []}})
+    c = StubClient({"finmindtrade": {"msg": "success", "status": 200, "data": []}})
     finmind.FinMindClient(c).fetch_dataset("TaiwanStockInfo")
     assert c.calls[0][2] is None
 
@@ -238,3 +238,87 @@ def test_finmind_unexpected_envelope_degrades():
     c = StubClient({"finmindtrade": {"msg": "x", "status": 200}})
     info, err = finmind.try_fetch_stock_info(finmind.FinMindClient(c))
     assert info is None and "規則過濾" in err
+
+
+# ---------- 2026-11-25 run1 實測後新增
+
+def test_triple_dash_from_tpex_is_no_price():
+    rows = [F.dq_row("8069", "元太", " ---", "---", "---", "---", "0", "0")]
+    m = tpex.parse_daily_quotes(F.daily_quotes_payload(rows), D)
+    q = m.quotes[0]
+    assert (q.open, q.high, q.low, q.close) == (None, None, None, None)
+    assert m.report.anomalies == []
+
+
+def test_mi_index_rejects_other_day_payload():
+    with pytest.raises(SchemaMismatch, match="不一致"):
+        twse.parse_mi_index(F.mi_index_payload(date="20261119"), D)
+
+
+def test_mi_index_requires_date_key_on_trading_day():
+    p = F.mi_index_payload()
+    del p["date"]
+    with pytest.raises(SchemaMismatch, match="缺少 date"):
+        twse.parse_mi_index(p, D)
+
+
+def test_daily_quotes_rejects_other_day_payload():
+    with pytest.raises(SchemaMismatch, match="不一致"):
+        tpex.parse_daily_quotes(F.daily_quotes_payload(date="20261119"), D)
+
+
+def test_duplicate_field_names_not_overwritten_and_not_required():
+    from src.fetchers.parsing import table_rows
+    table = F.INSTI_PAYLOAD["tables"][0]
+    rows = table_rows(table, "x", ("代號", "三大法人買賣超股數合計"))
+    assert "買進股數" not in rows[0]                     # 重複欄不放入 dict
+    with pytest.raises(SchemaMismatch, match="重複"):
+        table_rows(table, "x", ("買進股數",))
+
+
+def test_tpex_insti_net_uses_unique_total_field():
+    assert tpex.parse_insti_net(F.INSTI_PAYLOAD, D) == {
+        "00411A": 9_406_835.0, "006201": -705_724.0, "00679B": 45_735_291.0}
+
+
+def test_tpex_insti_total_equals_group_sums_in_run1_samples():
+    # 僅供佐證欄位關係（位置 3、4、7 組買賣超相加 = 合計）；正式程式不依位置取值
+    for row in F.INSTI_PAYLOAD["tables"][0]["data"]:
+        diff = lambda g: parse_number(row[2 + 3 * (g - 1) + 2])
+        assert diff(3) + diff(4) + diff(7) == parse_number(row[-1])
+
+
+def test_otc_index_month():
+    c = StubClient({"indexInfo/inx": F.INX_PAYLOAD})
+    assert tpex.fetch_otc_index_month(c, D) == [
+        {"date": date(2026, 11, 2), "open": 368.22, "high": 373.28, "low": 362.18, "close": 369.24}]
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("115/11/02", date(2026, 11, 2)),      # MI_5MINS_HIST 日期、tradingStock 日 期、exDailyQ 除權息日期
+    ("1160101", date(2027, 1, 1)),         # holidaySchedule Date
+    ("1141124", date(2025, 11, 24)),       # revivt 恢復買賣日期
+    ("114年11月21日", date(2025, 11, 21)),  # TWT49U 資料日期
+    ("2026/11/02", date(2026, 11, 2)),     # indexInfo/inx 日期
+])
+def test_run1_observed_date_formats(raw, expected):
+    assert parse_documented_date(raw) == expected
+
+
+def test_finmind_null_date_rows_provisional_rule():
+    data = [
+        {"industry_category": "半導體業", "stock_id": "6488", "stock_name": "環球晶", "type": "tpex", "date": None},
+        {"industry_category": "半導體業", "stock_id": "6488", "stock_name": "環球晶", "type": "tpex", "date": "2024-06-01"},
+        {"industry_category": "ETF", "stock_id": "00999A", "stock_name": "某ETF", "type": "twse", "date": None},
+    ]
+    latest = finmind.latest_info_by_stock(data)
+    assert latest["6488"]["_date"] == date(2024, 6, 1) and latest["6488"]["_date_unknown"] is False
+    assert latest["00999A"]["_date"] is None and latest["00999A"]["_date_unknown"] is True
+    stats = finmind.undated_stats(data)
+    assert stats["null_rows"] == 2 and stats["stock_ids_only_null"] == ["00999A"]
+
+
+def test_finmind_non_200_status_raises():
+    c = StubClient({"finmindtrade": {"msg": "Your level is free", "status": 400, "data": []}})
+    with pytest.raises(SchemaMismatch, match="status=400"):
+        finmind.FinMindClient(c).fetch_dataset("TaiwanStockPriceAdj")

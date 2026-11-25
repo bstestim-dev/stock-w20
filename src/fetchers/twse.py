@@ -14,6 +14,7 @@ from src.fetchers.parsing import (
     DailyQuote,
     ParseReport,
     SchemaMismatch,
+    check_response_date,
     code_prefilter,
     date_chunks,
     find_table,
@@ -71,6 +72,7 @@ def parse_mi_index(payload: dict[str, Any], trade_date: date, prefilter: bool = 
             return DailyMarket("twse", trade_date, is_trading=False)
         raise ApiStatusError(f"[{endpoint}] {trade_date} stat={payload.get('stat')!r}")
 
+    check_response_date(payload, endpoint, trade_date)
     report = ParseReport()
     idx_rows = table_rows(find_table(payload, endpoint, INDEX_TABLE_KEYWORD), endpoint, MI_INDEX_INDEX_FIELDS)
     taiex = [r for r in idx_rows if str(r["指數"]).strip() == TAIEX_NAME]

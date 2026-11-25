@@ -1,8 +1,10 @@
 """TPEx（證券櫃檯買賣中心）抓取器 — 端點與欄位僅限 spec_v1 第 3.3 節。
 
-尚待 API 驗證後才實作者（IR-1／IR-3，不猜測）：
-- 三大法人 ``/insti/dailyTrade`` 欄位名（Q4）：目前僅提供原始回應，網頁法人欄先顯示空值。
-- 櫃買指數 ``/indexInfo/inx`` 欄位名：規格僅寫「對應」，未列實際鍵名；第一階段大盤燈號只用 TAIEX，不受影響。
+2026-11-25 verify-api run1 實測後補齊：
+- 三大法人 ``/insti/dailyTrade``：24 欄中「買進股數／賣出股數／買賣超股數」各重複 7 次，不依位置猜測；
+  只取名稱唯一的「三大法人買賣超股數合計」（單位：股）。
+- 櫃買指數 ``/indexInfo/inx``：fields 為 日期、開市、最高、最低、收市、漲/跌；日期為西元 ``YYYY/MM/DD``。
+- dailyQuotes 另有第二張表「管理股票」（run1 兩個樣本日皆 0 列）；是否併入待 Hector 裁定，目前只讀第一張表。
 - 上櫃變更股票面額專用端點：規格標「待確認」，依備援方式（跳空異常警示）處理，不另尋端點。
 """
 
@@ -19,6 +21,7 @@ from src.fetchers.parsing import (
     DailyQuote,
     ParseReport,
     SchemaMismatch,
+    check_response_date,
     code_prefilter,
     date_chunks,
     extract_tables,
@@ -69,6 +72,7 @@ def _openapi(client: HttpClient, path: str, required: tuple[str, ...]) -> list[d
 def parse_daily_quotes(payload: dict[str, Any], trade_date: date, prefilter: bool = True) -> DailyMarket:
     endpoint = "TPEx dailyQuotes"
     _check_ok(payload, endpoint)
+    check_response_date(payload, endpoint, trade_date)  # run1：交易日與非交易日皆回傳 date
     if _first_table_is_empty(payload):  # 規格：非交易日 tables[0].data == []
         return DailyMarket("tpex", trade_date, is_trading=False)
     report = ParseReport()
@@ -162,12 +166,49 @@ def fetch_all_events(client: HttpClient, start: date, end: date) -> list[Corpora
     return events
 
 
-# ---------------------------------------------------------------- 三大法人（Q4：欄位待驗證）
+# ---------------------------------------------------------------- 櫃買指數（第二階段用）
+
+def fetch_otc_index_month(client: HttpClient, any_day_in_month: date) -> list[dict[str, Any]]:
+    endpoint = "TPEx indexInfo/inx"
+    payload = _www_get(client, "/indexInfo/inx", {"date": format_tpex_query_date(any_day_in_month)})
+    _check_ok(payload, endpoint)
+    if _first_table_is_empty(payload):
+        return []
+    rows = table_rows(find_table(payload, endpoint), endpoint, ("日期", "開市", "最高", "最低", "收市"))
+    return [{
+        "date": parse_documented_date(r["日期"]),
+        "open": parse_number(r["開市"]), "high": parse_number(r["最高"]),
+        "low": parse_number(r["最低"]), "close": parse_number(r["收市"]),
+    } for r in rows]
+
+
+# ---------------------------------------------------------------- 三大法人（參考欄）
+
+INSTI_TOTAL_FIELD = "三大法人買賣超股數合計"
+
 
 def fetch_insti_daily_raw(client: HttpClient, trade_date: date) -> dict[str, Any]:
-    """回傳原始回應；欄位對應待 API 驗證結果經 Hector 確認後再實作。"""
     return _www_get(client, "/insti/dailyTrade",
                     {"type": "Daily", "sect": "EW", "date": format_tpex_query_date(trade_date)})
+
+
+def parse_insti_net(payload: dict[str, Any], trade_date: date) -> dict[str, float]:
+    """回傳 {代號: 三大法人買賣超股數合計}（單位：股）；非交易日回空 dict。"""
+    endpoint = "TPEx insti/dailyTrade"
+    _check_ok(payload, endpoint)
+    if _first_table_is_empty(payload):
+        return {}
+    check_response_date(payload, endpoint, trade_date)
+    out = {}
+    for r in table_rows(find_table(payload, endpoint, "三大法人買賣明細"), endpoint, ("代號", "名稱", INSTI_TOTAL_FIELD)):
+        value = parse_number(r[INSTI_TOTAL_FIELD])
+        if value is not None:
+            out[str(r["代號"]).strip()] = value
+    return out
+
+
+def fetch_insti_net(client: HttpClient, trade_date: date) -> dict[str, float]:
+    return parse_insti_net(fetch_insti_daily_raw(client, trade_date), trade_date)
 
 
 # ---------------------------------------------------------------- OpenAPI v1
