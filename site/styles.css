@@ -64,3 +64,8 @@ tr.chartrow td { padding: 8px; background: #fafbfc; text-align: left; }
 #grid th:first-child, #grid td:first-child { position: sticky; left: 0; background: var(--bg); z-index: 1; }
 #grid th:first-child { background: var(--soft); z-index: 2; }
 tbody tr.row.open td:first-child { background: #eef5ff; }
+/* 出場狀態標籤（第 10.1 節第 4 項）：週五跌破紅色、週中警戒橘黃色；整格單行截斷，完整內容見 title */
+.badge.exit-confirmed { color: #ffffff; background: var(--up); border-color: var(--up); font-weight: 600; }
+.badge.exit-midweek { color: #7a4d00; background: #fff3cd; border-color: #f0b400; font-weight: 600; }
+td.clipcell.exitcell, .clip.exitnote { max-width: 420px; }
+.exitdesc { color: var(--muted); margin-left: 4px; }

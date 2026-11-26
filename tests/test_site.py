@@ -59,3 +59,21 @@ def test_single_line_rows_css():
     assert "white-space: normal" not in css
     assert re.search(r"\.clip \{[^}]*overflow: hidden;[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap;", css)
     assert re.search(r"tbody tr\.row td \{ height: 34px;", css)
+
+
+def test_exit_status_labels():
+    """第 10.1 節第 4 項：出場分頁顯示「跌破週 20MA：建議下週一開盤賣」（紅）與「週中警戒（尚未週結算）」（橘黃）標籤。"""
+    js = (SITE / "app.js").read_text(encoding="utf-8")
+    css = (SITE / "styles.css").read_text(encoding="utf-8")
+    assert "EXIT_CONFIRMED: { text: '跌破週 20MA：建議下週一開盤賣', cls: 'exit-confirmed' }" in js
+    assert "MIDWEEK_WARNING: { text: '週中警戒（尚未週結算）', cls: 'exit-midweek' }" in js
+    assert re.search(r"\.badge\.exit-confirmed \{[^}]*background: var\(--up\)", css)          # 紅
+    assert re.search(r"\.badge\.exit-midweek \{[^}]*background: #fff3cd;[^}]*border-color: #f0b400", css)  # 橘黃
+    assert re.search(r"\.clip\.exitnote \{ max-width: 420px; \}", css)
+
+
+def test_exit_note_text_in_data_unchanged():
+    """修法 A 只改網頁：JSON／CSV 的出場說明維持 M4-Q8 定案文字。"""
+    from src.screener import EXIT_NOTES
+    assert EXIT_NOTES["EXIT_CONFIRMED"] == "跌破週 20MA：建議下週一開盤賣"
+    assert EXIT_NOTES["MIDWEEK_WARNING"] == "週中收盤低於暫定週 20MA，待週五收盤確認，第一階段不構成賣訊"

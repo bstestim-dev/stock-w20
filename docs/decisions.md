@@ -105,3 +105,9 @@ M3-Q1～Q7 依 verify-api run4 實測（見 [`api-verification.md`](api-verifica
 | 編號 | 議題 | 裁定 |
 | :--- | :--- | :--- |
 | M6b-Q1 | 官方事後更正歷史資料時，快取如何更新 | **A：維持現狀**，不增加 `refresh_cache` 輸入；run-screen 維持第 8.2 節四個輸入。快取（actions/cache 與網站 `cache/`）以先前自官方抓取的副本為準，此限制與 D5 相同。 |
+
+## 2026-11-26（Asia/Taipei）第 10.1 節第 4 項修正
+
+| 編號 | 議題 | 裁定 |
+| :--- | :--- | :--- |
+| AC-4 | 出場分頁未顯示 FR-1.7「週中警戒（尚未週結算）」字樣（Hector 線上確認步驟 8 發現） | **修法 A：只改網頁標籤**，JSON／CSV 的 `exit_action_note` 維持 M4-Q8 定案文字。`EXIT_CONFIRMED` → 紅色標籤「跌破週 20MA：建議下週一開盤賣」（與說明相同，不重複顯示）；`MIDWEEK_WARNING` → 橘黃色標籤「週中警戒（尚未週結算）」，後接第 4.6 節說明；整格單行截斷，滑鼠停留看全文。驗收對照見 `docs/acceptance-phase1.md`。 |

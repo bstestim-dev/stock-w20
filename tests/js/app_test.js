@@ -101,6 +101,20 @@ assert.ok(!/class="wrap"/.test(cell));
 const tagCol = SW20.columns('new_cross', L, st).find((c) => c.key === 'tags');
 assert.ok(/class="clipcell"/.test(tagCol.html(rows[0])));
 const exitCol = SW20.columns('exit_alerts', L, st).find((c) => c.key === 'exit_status');
-assert.ok(/class="clipcell l" title="週中/.test(exitCol.html({ exit_action_note: '週中收盤低於暫定週 20MA' })));
+
+// 第 10.1 節第 4 項：出場狀態標籤（只改網頁；說明文字沿用 JSON 的 exit_action_note）
+const MID_NOTE = '週中收盤低於暫定週 20MA，待週五收盤確認，第一階段不構成賣訊';
+const mid = exitCol.html({ exit_status: 'MIDWEEK_WARNING', exit_action_note: MID_NOTE });
+assert.ok(mid.includes('<span class="badge exit-midweek">週中警戒（尚未週結算）</span>'), mid);
+assert.ok(mid.includes('<span class="exitdesc">' + MID_NOTE + '</span>'), mid);
+assert.ok(mid.includes('title="週中警戒（尚未週結算）：' + MID_NOTE + '"'), mid);
+assert.ok(mid.startsWith('<td class="clipcell exitcell l"') && mid.includes('<div class="clip exitnote">'));
+const conf = exitCol.html({ exit_status: 'EXIT_CONFIRMED', exit_action_note: '跌破週 20MA：建議下週一開盤賣' });
+assert.ok(conf.includes('<span class="badge exit-confirmed">跌破週 20MA：建議下週一開盤賣</span>'), conf);
+assert.ok(!conf.includes('exitdesc'), '週五跌破說明與標籤相同時不重複顯示');
+const other = exitCol.html({ exit_status: 'HOLD_ABOVE', exit_action_note: '站穩週 20MA 之上' });
+assert.ok(!/exit-(confirmed|midweek)/.test(other) && other.includes('站穩週 20MA 之上'));
+assert.ok(!/exit-/.test(exitCol.html({ exit_status: null, exit_action_note: null })));
+assert.strictEqual(SW20.EXIT_LABELS.MIDWEEK_WARNING.text, '週中警戒（尚未週結算）');
 
 console.log('app_test: OK');

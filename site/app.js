@@ -34,10 +34,23 @@
     return '<td class="clipcell" title="' + esc(title) + '"><div class="clip">' +
       items.map(function (t) { return '<span class="badge ' + cls + '">' + esc(t) + '</span>'; }).join('') + '</div></td>';
   }
-  function clipText(text) {
-    return '<td class="clipcell l" title="' + esc(text || '') + '"><div class="clip">' + esc(text || '') + '</div></td>';
-  }
   SW20.clipCell = clipCell;
+
+  // 出場狀態標籤（第 10.1 節第 4 項；FR-1.7、第 4.6 節）：只改網頁顯示，JSON／CSV 的說明文字維持 M4-Q8 定案
+  var EXIT_LABELS = {
+    EXIT_CONFIRMED: { text: '跌破週 20MA：建議下週一開盤賣', cls: 'exit-confirmed' },   // 紅色
+    MIDWEEK_WARNING: { text: '週中警戒（尚未週結算）', cls: 'exit-midweek' }           // 橘黃色
+  };
+  function exitCell(r) {
+    var lab = EXIT_LABELS[r.exit_status];
+    var note = r.exit_action_note || '';
+    if (lab && note === lab.text) note = '';          // 週五跌破的說明與標籤相同，不重複
+    var title = (lab ? lab.text : '') + (lab && note ? '：' : '') + note;
+    return '<td class="clipcell exitcell l" title="' + esc(title) + '"><div class="clip exitnote">' +
+      (lab ? '<span class="badge ' + lab.cls + '">' + esc(lab.text) + '</span>' : '') +
+      (note ? '<span class="exitdesc">' + esc(note) + '</span>' : '') + '</div></td>';
+  }
+  SW20.exitCell = exitCell; SW20.EXIT_LABELS = EXIT_LABELS;
 
   function signCls(v) { return !isNum(v) ? '' : (v > 0 ? 'pos' : (v < 0 ? 'neg' : '')); }
   function generatedText(iso) {      // "2026-11-25T18:05:12+08:00" → "2026-11-25 18:05 Asia/Taipei"
@@ -147,7 +160,7 @@
     }];
     if (tab === 'exit_alerts') {
       cols.push({ key: 'exit_status', label: '出場狀態', cls: 'l', sort: function (r) { return r.exit_status; },
-        html: function (r) { return clipText(r.exit_action_note); } });
+        html: exitCell });
     }
     if (tab === 'etf') {
       cols.push({ key: 'etf_subtype', label: '子類型', cls: 'l', sort: function (r) { return r.etf_subtype; },
