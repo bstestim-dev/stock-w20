@@ -84,5 +84,5 @@ GitHub 會移除超過 7 天未存取的 actions/cache；此時程式改從 http
 | M3 | 還原價、真正週 K、指標、週結算判定 | 完成（verify-api run4；裁定 M3-Q1～Q7 見 docs/decisions.md） |
 | M4 | 選股引擎 | 完成（m4_dry_run run 45597664068；裁定 M4-Q1～Q12、M4b-Q1） |
 | M5 | 輸出與靜態網頁 | 完成（m5_preview run 45621969504；裁定 M5-Q1～Q3；M5b 修正列高） |
-| M6 | GitHub Actions 與 Pages 部署 | 完成（run 45742193270）；第 10.1 節驗收見 docs/acceptance-phase1.md，第 4 項修正待線上確認 |
+| M6 | GitHub Actions 與 Pages 部署 | 完成（run 45742193270、45757811557）；第一階段 10.1 驗收 17／17 通過（docs/acceptance-phase1.md） |
 | M7 | 第二階段回測 | 第一階段驗收後才開始 |
