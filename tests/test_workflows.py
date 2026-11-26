@@ -83,3 +83,26 @@ def test_verify_api_m7_probe_job():
     assert "pytest -q" in runs and "python -m tools.verify_m7 --out verify_m7_report" in runs
     up = next(s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/upload-artifact"))
     assert up["with"]["name"] == "m7-probe-report" and up["if"] == "always()"
+
+
+def test_run_backtest_fetch_job():
+    """M7b：run-backtest 只能手動觸發、只有 fetch 模式；不讀 Secrets／token；快取失敗也儲存；在 6 小時 job 上限內。"""
+    doc = _load("run-backtest.yml")
+    inputs = doc.get("on", doc.get(True))["workflow_dispatch"]["inputs"]
+    assert inputs["mode"]["options"] == ["fetch"] and inputs["fetch_budget_min"]["default"] == "300"
+    assert doc["permissions"] == {"contents": "read"}
+    job = doc["jobs"]["fetch"]
+    text = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "run-backtest.yml").read_text(encoding="utf-8")
+    assert "secrets" not in text and "FINMIND_TOKEN" not in text
+    assert job["timeout-minutes"] <= 355
+    steps = {s.get("name", s.get("uses")): s for s in job["steps"]}
+    fetch = steps["抓取多年官方資料並建立 Parquet 快取"]
+    assert fetch["run"] == "python -m src.backtest.data fetch --cache-dir .cache/backtest --out backtest_fetch_report"
+    assert fetch["timeout-minutes"] < job["timeout-minutes"]
+    assert int(inputs["fetch_budget_min"]["default"]) < fetch["timeout-minutes"]
+    save = steps["儲存回測資料快取（成功或失敗皆儲存）"]
+    assert save["if"] == "always()" and save["with"]["path"] == ".cache/backtest"
+    restore = steps["還原回測資料快取"]
+    assert restore["with"]["restore-keys"].strip() == "backtest-data-v1-"
+    assert steps["上傳抓取報告"]["if"] == "always()"
+    assert [s.get("run") for s in job["steps"]].index("pytest -q") < [s.get("run") for s in job["steps"]].index(fetch["run"])

@@ -153,3 +153,19 @@ M3-Q1～Q7 依 verify-api run4 實測（見 [`api-verification.md`](api-verifica
 - 事件：2020～2024 每年 7/1～9/28 一段查 TWTAUU、TWTB8U 與 TPEx 三種事件；0050 以 TWT49U、TWTCAU 自 2020-03-02 至 2026-11-20 全段列出。查無 0050 事件時記為「無法判定」，交人工比對官方公告，不自行假設應有筆數。
 - FinMind 下市清單：只帶 `dataset=TaiwanStockDelisting`，不帶 token、不讀 Secrets。
 - 結果若與第一階段解析器不符，依 IR-1 先停下回報，不在 M7a 修改解析器。
+
+### M7a 線上結果（2026-11-26）
+
+verify-api `mode=m7_probe`，commit ccde5d4，run 45771753603（4 分 1 秒）：100 個探測全部成功；檢查 138 項通過、0 項不符；6 項「無法判定」皆為 dailyQuotes 表格清單資訊列。2020～2024 年 MI_INDEX（含報酬指數表）、dailyQuotes、櫃買指數、事件端點皆可用第一階段解析器解析；0050 於 2020-03-02～2026-11-20 共 14 筆事件（含 2025-06-18 ETF 分割，前收 188.65、參考 47.16）；FinMind 下市清單無 token 可讀（728 筆）。
+
+### M7b 實作說明（非裁定，供核對）
+
+- `src/backtest/data.py`（`python -m src.backtest.data fetch`），由 `.github/workflows/run-backtest.yml`（只能手動觸發、只有 `mode=fetch`）執行；只抓資料、建快取，不做回測。
+- 資料區間 2020-03-02（M7-Q1）～最近一個早於今日的週五（可用 `end_date` 指定較早的週五）；2026-11-26 執行時為 2026-11-20，共 1,755 個平日。
+- 每個平日 2 次請求（MI_INDEX、dailyQuotes，參數與第一階段相同）；報酬指數從同一份 MI_INDEX 回應讀取，不另發請求。事件表 7 類 × 28 段（90 日）＝196 次；股本快照 3 次、下市清單 1 次。
+- 續抓：日檔、事件段檔逐一原子寫入；只存早於今日且狀態確定的日子。超過 `fetch_budget_min`（預設 300 分）即停止、彙整現有資料並以結束碼 3 結束；連續 5 個平日抓取失敗也停止（防限流時空耗時數），以結束碼 2 結束。快取（`.cache/backtest`）不論成敗都存入 actions/cache。
+- Parquet：`prices_YYYY.parquet`（按年分段）、`index_daily.parquet`（加權指數、報酬指數）、`calendar.parquet`（交易日／休市日）、`events.parquet`，另有 `manifest.json`（筆數、缺漏、SHA-256）。
+- 檢查（只用快取內官方數值，不補值）：平日是否皆已確認、事件段是否齊全、每個交易日是否有報酬指數、加權指數與 0050 收盤；成交量單位檢查以「成交金額 ÷（成交股數 × 收盤價）」每日中位數 0.8～1.25 為準（M7a 樣本 2020-03-02 006201：745,150 ÷ 13.55 ≈ 54,993 股，與成交股數 55,000 相符）。
+- 股本快照（M7-Q4）每次抓取時更新並記錄取得時間；官方基本資料失敗時沿用前一份。FinMind TaiwanStockInfo 與 TaiwanStockDelisting 一律不帶 token。
+- 未抓櫃買指數：已定案規則（大盤燈號用加權指數、基準為加權報酬指數與 0050）都不需要。
+- 本機環境未安裝 pyarrow，Parquet 實際讀寫測試（`test_parquet_roundtrip_with_pyarrow`）在本機略過，於 Actions 的 pytest 步驟執行；其餘流程以假寫入器測試。

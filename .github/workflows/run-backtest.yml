@@ -1,0 +1,79 @@
+# 林恩如週 20MA 選股系統：第二階段回測（M7）。僅 workflow_dispatch，不含任何定期排程，不使用任何 Secrets／token。
+# - M7b 只有 mode=fetch：抓 2020-03-02 起多年 TWSE／TPEx 官方行情、事件表、股本快照與 FinMind 下市清單（無 token），
+#   彙整為 Parquet 分段快取（src/backtest/data.py）；不做回測（M7c 起再加 mode）。
+# - M7-Q2：快取只放 actions/cache；冷啟動約 1,755 個平日（每日 2 次請求），一次執行抓不完時以結束碼 3 結束，
+#   已抓資料照樣存入快取，再執行一次即接續。快取超過 7 日未使用會被 GitHub 清除，屆時接受重抓。
+# - 抓取報告（report.md、manifest.json）上傳為 artifact；不部署 Pages（M7-Q17）。
+name: run-backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "fetch＝抓取多年官方資料並建立 Parquet 回測快取（不做回測）"
+        required: false
+        default: "fetch"
+        type: choice
+        options: ["fetch"]
+      end_date:
+        description: "資料終點 YYYY-MM-DD（須為週五）；空白＝最近一個已結算週五（Asia/Taipei）"
+        required: false
+        default: ""
+        type: string
+      fetch_budget_min:
+        description: "本次抓取時間上限（分鐘）；超過即保存進度並以結束碼 3 結束"
+        required: false
+        default: "300"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backtest-data
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    if: ${{ inputs.mode == 'fetch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      TZ: Asia/Taipei
+      # 以環境變數傳入，避免把輸入值直接展開在 shell 指令中
+      BT_END_DATE: ${{ inputs.end_date }}
+      BT_FETCH_BUDGET_MIN: ${{ inputs.fetch_budget_min }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: 安裝套件
+        run: pip install -r requirements.txt
+      - name: 單元測試
+        run: pytest -q
+      - name: 還原回測資料快取
+        uses: actions/cache/restore@v5
+        with:
+          path: .cache/backtest
+          key: backtest-data-v1-${{ github.run_id }}
+          restore-keys: |
+            backtest-data-v1-
+      - name: 抓取多年官方資料並建立 Parquet 快取
+        timeout-minutes: 330
+        run: python -m src.backtest.data fetch --cache-dir .cache/backtest --out backtest_fetch_report
+      - name: 儲存回測資料快取（成功或失敗皆儲存）
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: .cache/backtest
+          key: backtest-data-v1-${{ github.run_id }}
+      - name: 上傳抓取報告
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: backtest-fetch-report
+          path: backtest_fetch_report/
+          retention-days: 14

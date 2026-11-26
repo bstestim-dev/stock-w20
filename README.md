@@ -48,6 +48,13 @@ pytest
 TPEx dailyQuotes、櫃買指數、事件端點與 0050 事件，並不帶 token 試讀 FinMind 下市清單；約 100 次請求，**不**建快取、**不**回測。
 產出 `verify_m7_report/report.md` 與原始回應 `raw/`（Summary 頁＋artifact `m7-probe-report`）。本機可執行 `python -m tools.verify_m7 --out verify_m7_report`。
 
+## 回測資料抓取（M7b）
+
+Actions → `run-backtest` → Run workflow，`mode = fetch`（`end_date` 空白＝最近一個已結算週五；`fetch_budget_min` 預設 300）。
+抓 2020-03-02 起 TWSE／TPEx 官方行情、事件表、股本快照與 FinMind 下市清單（不帶 token），彙整為 Parquet 存入 actions/cache；
+**不**做回測、**不**部署 Pages、**不**使用任何 Secrets。冷啟動約 1,755 個平日，一次抓不完會以結束碼 3 結束，再執行一次即接續。
+報告見該次執行的 Summary 頁與 artifact `backtest-fetch-report`（`report.md`、`manifest.json`）。本機：`python -m src.backtest.data fetch --cache-dir .cache/backtest`。
+
 ## 輸出與網頁（M5）
 
 - 產出：`python -m src.screener --out site/data`（讀 `config.yaml` 與 `SW20_*` 環境變數），寫出
@@ -93,4 +100,4 @@ GitHub 會移除超過 7 天未存取的 actions/cache；此時程式改從 http
 | M4 | 選股引擎 | 完成（m4_dry_run run 45597664068；裁定 M4-Q1～Q12、M4b-Q1） |
 | M5 | 輸出與靜態網頁 | 完成（m5_preview run 45621969504；裁定 M5-Q1～Q3；M5b 修正列高） |
 | M6 | GitHub Actions 與 Pages 部署 | 完成（run 45742193270、45757811557）；第一階段 10.1 驗收 17／17 通過（docs/acceptance-phase1.md） |
-| M7 | 第二階段回測 | 裁定 M7-Q1～Q19（docs/decisions.md）；M7a 歷史資料抽查：verify-api `mode=m7_probe`，待線上執行驗收；M7b～M7e 未開始 |
+| M7 | 第二階段回測 | 裁定 M7-Q1～Q19（docs/decisions.md）；M7a 完成（run 45771753603）；M7b 多年資料抓取與 Parquet 快取：run-backtest `mode=fetch`，待線上執行驗收；M7c～M7e 未開始 |
