@@ -2,17 +2,19 @@
 # M4 起增加 mode=m4_dry_run：以真實 60 週資料試跑選股引擎（不部署 Pages、不寫入 site/）。
 # M5 起增加 mode=m5_preview：產出 site/data/（latest.json、latest.js、4 份 CSV）並把整個 site/ 打包成 artifact
 #   site-preview 供下載預覽；不部署 Pages（Pages 部署為 M6 的 run-screen.yml）。
+# M7a 起增加 mode=m7_probe：抽查 2020～2024 年歷史端點結構（約 100 次請求，不建快取、不回測）；
+#   FinMind 下市清單刻意不帶 token 試讀（M7-Q19），本 job 不設定任何 token。
 name: verify-api
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "api＝API 實測；m4_dry_run＝選股引擎全量試跑；m5_preview＝產出網頁預覽 artifact（後兩者約 30～60 分鐘）"
+        description: "api＝API 實測；m4_dry_run＝選股引擎全量試跑；m5_preview＝產出網頁預覽 artifact（後兩者約 30～60 分鐘）；m7_probe＝M7a 歷史資料抽查（約 5～10 分鐘）"
         required: false
         default: "api"
         type: choice
-        options: ["api", "m4_dry_run", "m5_preview"]
+        options: ["api", "m4_dry_run", "m5_preview", "m7_probe"]
       as_of_date:
         description: "m4_dry_run／m5_preview 用：基準日 YYYY-MM-DD（空白＝今日，Asia/Taipei）"
         required: false
@@ -113,4 +115,31 @@ jobs:
         with:
           name: site-preview
           path: site/
+          retention-days: 14
+
+  m7-probe:
+    if: ${{ inputs.mode == 'm7_probe' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TZ: Asia/Taipei
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: 安裝套件
+        run: pip install -r requirements.txt
+      - name: 單元測試
+        run: pytest -q
+      - name: M7a 歷史資料抽查
+        run: python -m tools.verify_m7 --out verify_m7_report
+      - name: 上傳報告
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: m7-probe-report
+          path: verify_m7_report/
           retention-days: 14

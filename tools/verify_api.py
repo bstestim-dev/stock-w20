@@ -578,13 +578,14 @@ def _is_weekend(value: Any) -> bool:
 
 # ---------------------------------------------------------------- 輸出
 
-def render(v: Verifier, sample: date, window_end: date) -> str:
+def render(v: Verifier, sample: date, window_end: date, title: str = "M2 API 實測報告",
+           scope: str | None = None) -> str:
     ok = sum(1 for r in v.results if r["ok"])
     lines = [
-        "# M2 API 實測報告",
+        f"# {title}",
         "",
         f"- 產生時間：{format_taipei_iso(now_taipei())}（Asia/Taipei）",
-        f"- 樣本交易日：{sample}；短窗終點：{window_end}",
+        f"- {scope}" if scope else f"- 樣本交易日：{sample}；短窗終點：{window_end}",
         f"- 請求：{len(v.results)} 個探測，成功 {ok}，失敗 {len(v.results) - ok}",
         "",
         "## 一、檢查結果",

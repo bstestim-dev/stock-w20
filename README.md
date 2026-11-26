@@ -42,6 +42,12 @@ pytest
 產出 `dry_run_report/report.md` 與 `result.json`（artifact `m4-dry-run-report`），**不**部署 Pages、**不**寫入 `site/`。
 報告內含第 10.1 節第 3、4 項核對、跳空異常與事件對帳結果，以及族群、ETF 子類型、處置／注意的實測統計。本機可執行 `python -m tools.dry_run_m4 --out dry_run_report`。
 
+## 歷史資料抽查（M7a）
+
+同一支 `verify-api` workflow 選 `mode = m7_probe`（其他輸入不用填），抽查 2020～2024 年 MI_INDEX（含報酬指數表）、
+TPEx dailyQuotes、櫃買指數、事件端點與 0050 事件，並不帶 token 試讀 FinMind 下市清單；約 100 次請求，**不**建快取、**不**回測。
+產出 `verify_m7_report/report.md` 與原始回應 `raw/`（Summary 頁＋artifact `m7-probe-report`）。本機可執行 `python -m tools.verify_m7 --out verify_m7_report`。
+
 ## 輸出與網頁（M5）
 
 - 產出：`python -m src.screener --out site/data`（讀 `config.yaml` 與 `SW20_*` 環境變數），寫出
@@ -87,4 +93,4 @@ GitHub 會移除超過 7 天未存取的 actions/cache；此時程式改從 http
 | M4 | 選股引擎 | 完成（m4_dry_run run 45597664068；裁定 M4-Q1～Q12、M4b-Q1） |
 | M5 | 輸出與靜態網頁 | 完成（m5_preview run 45621969504；裁定 M5-Q1～Q3；M5b 修正列高） |
 | M6 | GitHub Actions 與 Pages 部署 | 完成（run 45742193270、45757811557）；第一階段 10.1 驗收 17／17 通過（docs/acceptance-phase1.md） |
-| M7 | 第二階段回測 | 第一階段驗收後才開始 |
+| M7 | 第二階段回測 | 裁定 M7-Q1～Q19（docs/decisions.md）；M7a 歷史資料抽查：verify-api `mode=m7_probe`，待線上執行驗收；M7b～M7e 未開始 |

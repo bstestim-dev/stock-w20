@@ -69,3 +69,17 @@ def test_actions_on_node24_versions():
                 if "uses" in step:
                     name, ver = step["uses"].split("@")
                     assert allowed.get(name) == ver, (f.name, step["uses"])
+
+
+def test_verify_api_m7_probe_job():
+    """M7a：verify-api 新增 mode=m7_probe（仍只能手動觸發）；不設定 token、不讀 Secrets，報告上傳 artifact。"""
+    doc = _load("verify-api.yml")
+    assert "m7_probe" in doc.get("on", doc.get(True))["workflow_dispatch"]["inputs"]["mode"]["options"]
+    job = doc["jobs"]["m7-probe"]
+    assert job["if"] == "${{ inputs.mode == 'm7_probe' }}"
+    text = yaml.safe_dump(job, allow_unicode=True)
+    assert "secrets" not in text and "FINMIND_TOKEN" not in text
+    runs = [s.get("run", "") for s in job["steps"]]
+    assert "pytest -q" in runs and "python -m tools.verify_m7 --out verify_m7_report" in runs
+    up = next(s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/upload-artifact"))
+    assert up["with"]["name"] == "m7-probe-report" and up["if"] == "always()"
