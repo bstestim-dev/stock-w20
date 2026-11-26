@@ -29,6 +29,7 @@ import os
 import statistics
 import sys
 import time
+import traceback
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -52,7 +53,7 @@ TR_INDEX_NAME = "發行量加權股價報酬指數"
 BENCH_ETF = "0050"
 MAX_CONSECUTIVE_ERRORS = 5             # 連續 5 個平日抓取失敗即停止（疑似限流或官方異常），已抓資料保留
 UNIT_RATIO_RANGE = (0.8, 1.25)         # 成交金額 ÷（成交股數 × 收盤價）每日中位數的合理範圍（單位檢查）
-EXIT_OK, EXIT_INCOMPLETE, EXIT_BUDGET = 0, 2, 3
+EXIT_OK, EXIT_ERROR, EXIT_INCOMPLETE, EXIT_BUDGET = 0, 1, 2, 3   # 1＝中途未預期錯誤（報告照樣寫出）
 
 TWSE_EVENT_KINDS = tuple(twse._EVENT_SPECS)   # dividend, capital_reduction, par_value_change, etf_split
 TPEX_EVENT_KINDS = tuple(tpex._EVENT_SPECS)   # dividend, capital_reduction, etf_split
@@ -263,7 +264,10 @@ class FetchSummary:
     events_fetched: int = 0
     event_errors: list[tuple[str, str]] = field(default_factory=list)
     snapshot_notes: list[str] = field(default_factory=list)
-    stopped: str | None = None          # None | "budget" | "consecutive_errors"
+    stopped: str | None = None          # None | "budget" | "consecutive_errors" | "error"
+    stage: str = "開始"                  # 目前（或中止時）所在階段
+    last_day: str | None = None         # 最後一個開始處理的平日（含失敗、中止於該日）
+    error: str | None = None            # 未預期錯誤摘要（stopped == "error"）
     requests: int = 0
     elapsed_sec: float = 0.0
 
@@ -310,6 +314,7 @@ def fetch_all(client: HttpClient, store: BacktestStore, end: date, today: date,
     n0 = len(getattr(client, "logs", []))
     s = FetchSummary(end=end)
     try:
+        s.stage = "事件表"
         grid = event_grid(end)
         s.events_total = len(grid)
         removed = store.prune_events(grid)
@@ -329,7 +334,10 @@ def fetch_all(client: HttpClient, store: BacktestStore, end: date, today: date,
         log(f"事件：共 {s.events_total} 段，本次抓 {s.events_fetched}，失敗 {len(s.event_errors)}")
 
         _check_deadline(deadline, clock)
+        s.stage = "快照"
         fetch_snapshots(client, store, s, format_taipei_iso(now_taipei()))
+
+        s.stage = "日資料"
 
         weekdays = weekdays_between(DATA_START, end)
         s.weekdays_total = len(weekdays)
@@ -339,6 +347,7 @@ def fetch_all(client: HttpClient, store: BacktestStore, end: date, today: date,
         consecutive = 0
         for i, d in enumerate(todo_days, 1):
             _check_deadline(deadline, clock)
+            s.last_day = d.isoformat()          # 先記錄：若在此日中途出錯，報告可指出是哪一天
             day = fetch_bt_day(client, d)
             if store.put_day(day, today):
                 s.days_fetched += 1
@@ -358,6 +367,13 @@ def fetch_all(client: HttpClient, store: BacktestStore, end: date, today: date,
     except BudgetExceeded:
         s.stopped = "budget"
         log("已達本次抓取時間上限，停止抓取（已抓資料已保存，請再執行一次接續）")
+    except Exception as exc:  # noqa: BLE001 — 未預期錯誤：保留進度、交由 run() 寫出報告後以結束碼 1 結束
+        s.stopped = "error"
+        tb = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+        where = traceback.extract_tb(exc.__traceback__)[-1] if exc.__traceback__ else None
+        s.error = (f"{s.stage}階段（最後處理日 {s.last_day or '無'}）：{tb}"
+                   + (f"［{Path(where.filename).name}:{where.lineno} {where.name}］" if where else ""))[:1500]
+        log(f"未預期錯誤，停止抓取（已抓資料已保存）：{s.error}")
     s.requests = len(getattr(client, "logs", [])) - n0
     s.elapsed_sec = clock() - started
     return s
@@ -543,6 +559,7 @@ def render_report(manifest: dict[str, Any], summary: FetchSummary) -> str:
     m, ev, sn = manifest, manifest["events"], manifest["snapshots"]
     stopped = {"budget": "已達本次抓取時間上限（請再執行一次接續）",
                "consecutive_errors": f"連續 {MAX_CONSECUTIVE_ERRORS} 個平日抓取失敗而停止（疑似限流或官方異常，請稍後再執行）",
+               "error": f"中途發生未預期錯誤而中止（已抓資料已保存於快取，再執行即接續）：{summary.error}",
                None: "本次待抓項目已全部處理"}[summary.stopped]
     checks = [
         ("平日皆已確認（交易日或兩市皆休市）", not m["missing_days"], f"缺 {len(m['missing_days'])} 日：{_short([x['date'] + ' ' + x['reason'] for x in m['missing_days']], 10)}"),
@@ -565,7 +582,7 @@ def render_report(manifest: dict[str, Any], summary: FetchSummary) -> str:
         f"- 資料區間：{m['data_start']}～{m['data_end']}（M7-Q1）；資料完整：**{'是' if m['complete'] else '否'}**",
         f"- 本次：{stopped}；請求 {summary.requests} 次；耗時 {summary.elapsed_sec / 60:.1f} 分",
         f"- 日資料：平日 {summary.weekdays_total}，執行前快取已有 {summary.days_cached_before}，本次寫入 {summary.days_fetched}，"
-        f"本次失敗／不完整 {len(summary.day_errors)}",
+        f"本次失敗／不完整 {len(summary.day_errors)}；最後處理日 {summary.last_day or '無'}",
         f"- 事件表：{summary.events_total} 段，執行前快取已有 {summary.events_cached_before}，本次抓 {summary.events_fetched}，失敗 {len(summary.event_errors)}",
         f"- 交易日 {m['trading_days']}、兩市皆休市 {m['non_trading_days']}；各年交易日 {m['trading_days_by_year']}；行情列數 {m['price_rows']}",
         "- 只抓資料、不做回測；未讀取或傳送任何 token。",
@@ -590,6 +607,24 @@ def render_report(manifest: dict[str, Any], summary: FetchSummary) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_progress_only(summary: FetchSummary, build_error: str) -> str:
+    """Parquet 彙整也失敗時的最小報告：只列抓取進度與錯誤（不含檢查結果）。"""
+    lines = [
+        "# M7b 回測資料抓取報告（彙整失敗，僅列進度）",
+        "",
+        f"- 產生時間：{format_taipei_iso(now_taipei())}（Asia/Taipei）",
+        f"- 資料區間：{DATA_START}～{summary.end}（M7-Q1）；資料完整：**否**（Parquet 彙整失敗，未檢查）",
+        f"- 抓取：{'中途未預期錯誤：' + summary.error if summary.error else (summary.stopped or '本次待抓項目已全部處理')}",
+        f"- Parquet 彙整錯誤：{build_error}",
+        f"- 中止時階段：{summary.stage}；最後處理日 {summary.last_day or '無'}；請求 {summary.requests} 次；耗時 {summary.elapsed_sec / 60:.1f} 分",
+        f"- 日資料：平日 {summary.weekdays_total}，執行前快取已有 {summary.days_cached_before}，本次寫入 {summary.days_fetched}，"
+        f"本次失敗／不完整 {len(summary.day_errors)}",
+        f"- 事件表：{summary.events_total} 段，執行前快取已有 {summary.events_cached_before}，本次抓 {summary.events_fetched}，失敗 {len(summary.event_errors)}",
+        "- 已抓資料保留在快取目錄，下次執行接續。",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 # ---------------------------------------------------------------- 入口
 
 def run(cache_dir: str, out_dir: str, end_raw: str | None = None, budget_min: float | None = None,
@@ -607,17 +642,25 @@ def run(cache_dir: str, out_dir: str, end_raw: str | None = None, budget_min: fl
     deadline = clock() + budget_min * 60 if budget_min else None
     log(f"M7b 回測資料抓取：{DATA_START}～{end}；快取 {cache_dir}；時間上限 {budget_min or '不限'} 分")
     summary = fetch_all(client, store, end, today, deadline=deadline, clock=clock, log=log)
-    manifest = build_parquet(store, end, summary, writer=writer, suffix=suffix)
-    report = render_report(manifest, summary)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    manifest, build_error = None, None
+    try:
+        manifest = build_parquet(store, end, summary, writer=writer, suffix=suffix)
+        report = render_report(manifest, summary)
+    except Exception as exc:  # noqa: BLE001 — 彙整失敗仍寫出進度報告
+        build_error = "".join(traceback.format_exception_only(type(exc), exc)).strip()[:1500]
+        report = render_progress_only(summary, build_error)
     (out / "report.md").write_text(report, encoding="utf-8")
-    (out / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    if manifest is not None:
+        (out / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
         with open(summary_path, "a", encoding="utf-8") as fh:
             fh.write(report.encode("utf-8")[:1_000_000].decode("utf-8", errors="ignore"))
     log(report)
+    if summary.stopped == "error" or manifest is None:
+        return EXIT_ERROR
     if summary.stopped == "budget":
         return EXIT_BUDGET
     return EXIT_OK if manifest["complete"] else EXIT_INCOMPLETE

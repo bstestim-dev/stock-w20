@@ -3,6 +3,7 @@
 #   彙整為 Parquet 分段快取（src/backtest/data.py）；不做回測（M7c 起再加 mode）。
 # - M7-Q2：快取只放 actions/cache；冷啟動約 1,755 個平日（每日 2 次請求），一次執行抓不完時以結束碼 3 結束，
 #   已抓資料照樣存入快取，再執行一次即接續。快取超過 7 日未使用會被 GitHub 清除，屆時接受重抓。
+#   結束碼：0＝資料齊全；2＝有缺漏或連續 5 個平日抓取失敗；3＝達時間上限；1＝中途未預期錯誤（報告照樣寫出）。
 # - 抓取報告（report.md、manifest.json）上傳為 artifact；不部署 Pages（M7-Q17）。
 name: run-backtest
 

@@ -106,3 +106,14 @@ def test_run_backtest_fetch_job():
     assert restore["with"]["restore-keys"].strip() == "backtest-data-v1-"
     assert steps["上傳抓取報告"]["if"] == "always()"
     assert [s.get("run") for s in job["steps"]].index("pytest -q") < [s.get("run") for s in job["steps"]].index(fetch["run"])
+
+
+def test_run_backtest_cache_keys_resume():
+    """M7b 修正（C）：每次以 run_id 存新快取；還原以前綴 backtest-data-v1- 取最近一份（如 backtest-data-v1-45775896782）。"""
+    job = _load("run-backtest.yml")["jobs"]["fetch"]
+    steps = {s.get("name"): s for s in job["steps"]}
+    restore, save = steps["還原回測資料快取"]["with"], steps["儲存回測資料快取（成功或失敗皆儲存）"]["with"]
+    prefix = restore["restore-keys"].strip()
+    assert save["key"] == restore["key"] == prefix + "${{ github.run_id }}"
+    assert restore["path"] == save["path"] == ".cache/backtest"
+    assert "backtest-data-v1-45775896782".startswith(prefix)

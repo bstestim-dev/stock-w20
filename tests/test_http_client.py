@@ -2,6 +2,7 @@ import json
 
 import pytest
 import requests
+import urllib3
 
 from src.fetchers.http import FetchError, HttpClient, HttpStatusError, QuotaExceeded
 
@@ -69,6 +70,9 @@ def test_polite_delay_between_requests():
         FakeResponse(raw=b"<html>oops</html>"),
         requests.ConnectionError("boom"),
         requests.Timeout("slow"),
+        requests.exceptions.ChunkedEncodingError("Response ended prematurely"),
+        urllib3.exceptions.ProtocolError("Response ended prematurely"),
+        requests.exceptions.ContentDecodingError("bad gzip"),
     ],
 )
 def test_retryable_errors_then_success(first):
@@ -85,6 +89,30 @@ def test_backoff_schedule_and_give_up():
     assert t.sleeps == [3.0, 8.0, 20.0]    # spec 第 9 節
     assert len(sess.calls) == 4
     assert c.logs[-1].error == "HTTP 500"
+
+
+class BrokenBodyResponse:
+    """狀態碼已收到，但讀取內容時連線中斷（M7b run 45775896782 的情況）。"""
+    status_code = 200
+
+    @property
+    def content(self):
+        raise requests.exceptions.ChunkedEncodingError("Response ended prematurely")
+
+
+def test_body_read_interrupted_is_retried_then_success():
+    c, sess, t = make([BrokenBodyResponse(), FakeResponse(body={"ok": 1})], delay_sec=0)
+    assert c.get_json("u") == {"ok": 1}
+    assert t.sleeps == [3.0] and len(sess.calls) == 2
+
+
+def test_transport_errors_exhausted_become_fetch_error():
+    c, sess, t = make([requests.exceptions.ChunkedEncodingError("x"), BrokenBodyResponse(),
+                       urllib3.exceptions.ProtocolError("x"), BrokenBodyResponse()], delay_sec=0)
+    with pytest.raises(FetchError, match="重試 3 次"):
+        c.get_json("u")
+    assert t.sleeps == [3.0, 8.0, 20.0] and len(sess.calls) == 4
+    assert c.logs[-1].error == "連線失敗：ChunkedEncodingError" and c.logs[-1].status is None
 
 
 def test_client_error_not_retried():

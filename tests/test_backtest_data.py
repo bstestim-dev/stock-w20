@@ -242,3 +242,88 @@ def test_parquet_roundtrip_with_pyarrow(tmp_path, monkeypatch):
     ev = pd.read_parquet(store.parquet_dir / "events.parquet")
     assert set(ev.columns) == set(bt.EVENT_COLUMNS) and len(ev) == 2
 
+
+
+# ---------------------------------------------------------------- M7b 修正：傳輸錯誤、未預期錯誤、接續
+
+class _Resp:
+    def __init__(self, obj):
+        self.status_code = 200
+        self.content = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+
+
+class RoutedSession:
+    """把 FakeClient 的路由包成 requests.Session 介面，讓真正的 HttpClient（重試、退避）處理；dailyQuotes 回應中途斷線。"""
+
+    def __init__(self):
+        self.fake, self.calls = FakeClient(), []
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        self.calls.append(url)
+        if "dailyQuotes" in url:
+            import requests
+            raise requests.exceptions.ChunkedEncodingError("Response ended prematurely")
+        return _Resp(self.fake.get_json(url, params, headers))
+
+
+def _small_run(monkeypatch, start=date(2026, 10, 5), end=date(2026, 10, 16)):
+    monkeypatch.setattr(bt, "event_grid", lambda end: [])
+    monkeypatch.setattr(bt, "DATA_START", start)
+    monkeypatch.setattr(bt, "resolve_end", lambda raw, today: end)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+
+
+def test_transport_error_is_retried_then_counted_as_day_error(tmp_path, monkeypatch):
+    from src.fetchers.http import HttpClient
+    _small_run(monkeypatch)
+    sess = RoutedSession()
+    client = HttpClient(session=sess, delay_sec=0, sleep=lambda s: None)
+    code = bt.run(str(tmp_path / "c"), str(tmp_path / "o"), client=client, today=TODAY,
+                  writer=pkl_writer, suffix=".pkl", log=lambda m: None)
+    assert code == bt.EXIT_INCOMPLETE                                    # 不再崩潰：當日失敗、連續 5 次即停（結束碼 2）
+    assert sum("dailyQuotes" in u for u in sess.calls) == 5 * 4          # 每日 1 次＋重試 3 次
+    rep = (tmp_path / "o" / "report.md").read_text(encoding="utf-8")
+    assert "連續 5 個平日抓取失敗而停止" in rep and "ChunkedEncodingError" in rep
+
+
+class CrashOnDay(FakeClient):
+    def __init__(self, crash_day):
+        super().__init__()
+        self.crash_day = crash_day
+
+    def get_json(self, url, params=None, headers=None):
+        if "MI_INDEX" in url and _d(dict(params), "date") == self.crash_day:
+            raise RuntimeError("boom")                                  # 非可回復例外，模擬未預期錯誤
+        return super().get_json(url, params, headers)
+
+
+def test_unexpected_error_writes_report_then_next_run_resumes(tmp_path, monkeypatch):
+    _small_run(monkeypatch)
+    kw = dict(today=TODAY, writer=pkl_writer, suffix=".pkl", log=lambda m: None)
+    code = bt.run(str(tmp_path / "c"), str(tmp_path / "o"), client=CrashOnDay(date(2026, 10, 9)), **kw)
+    assert code == bt.EXIT_ERROR
+    rep = (tmp_path / "o" / "report.md").read_text(encoding="utf-8")
+    assert "中途發生未預期錯誤而中止" in rep and "RuntimeError: boom" in rep and "最後處理日 2026-10-09" in rep
+    assert "本次寫入 4" in rep
+    m = json.loads((tmp_path / "o" / "manifest.json").read_text(encoding="utf-8"))
+    assert m["trading_days"] == 4 and not m["complete"]
+    assert sorted(p.name for p in (tmp_path / "c" / "days").glob("*.json.gz"))[-1] == "2026-10-08.json.gz"
+
+    c2 = FakeClient()
+    assert bt.run(str(tmp_path / "c"), str(tmp_path / "o"), client=c2, **kw) == bt.EXIT_OK
+    assert sum("MI_INDEX" in x.url for x in c2.logs) == 6               # 只抓 10/9～10/16 這 6 個平日
+    assert "執行前快取已有 4" in (tmp_path / "o" / "report.md").read_text(encoding="utf-8")
+
+
+def test_build_failure_still_writes_progress_report(tmp_path, monkeypatch):
+    _small_run(monkeypatch)
+
+    def bad_writer(df, path):
+        raise OSError("disk full")
+    code = bt.run(str(tmp_path / "c"), str(tmp_path / "o"), client=FakeClient(), today=TODAY,
+                  writer=bad_writer, suffix=".pkl", log=lambda m: None)
+    assert code == bt.EXIT_ERROR
+    rep = (tmp_path / "o" / "report.md").read_text(encoding="utf-8")
+    assert rep.startswith("# M7b 回測資料抓取報告（彙整失敗，僅列進度）") and "OSError: disk full" in rep
+    assert "本次寫入 10" in rep and not (tmp_path / "o" / "manifest.json").exists()
+    assert len(list((tmp_path / "c" / "days").glob("*.json.gz"))) == 10   # 已抓資料仍在快取

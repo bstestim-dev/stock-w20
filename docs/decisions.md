@@ -169,3 +169,10 @@ verify-api `mode=m7_probe`，commit ccde5d4，run 45771753603（4 分 1 秒）�
 - 股本快照（M7-Q4）每次抓取時更新並記錄取得時間；官方基本資料失敗時沿用前一份。FinMind TaiwanStockInfo 與 TaiwanStockDelisting 一律不帶 token。
 - 未抓櫃買指數：已定案規則（大盤燈號用加權指數、基準為加權報酬指數與 0050）都不需要。
 - 本機環境未安裝 pyarrow，Parquet 實際讀寫測試（`test_parquet_roundtrip_with_pyarrow`）在本機略過，於 Actions 的 pytest 步驟執行；其餘流程以假寫入器測試。
+
+### M7b 修正（run 45775896782 後）
+
+- 現象：commit 804b03a、run 45775896782 抓到第 1,000 個平日（2023-12-29）後，TPEx dailyQuotes 回應讀取中途斷線（`requests.exceptions.ChunkedEncodingError: Response ended prematurely`），HttpClient 未把它列為可重試錯誤，例外一路拋出，結束碼 1、未寫出報告；快取照樣存入（key `backtest-data-v1-45775896782`，61.58 MiB）。
+- 修正 A：`src/fetchers/http.py` 把「回應中途斷線」類傳輸錯誤（`ChunkedEncodingError`、`ContentDecodingError`、urllib3 `ProtocolError`）與連線失敗、逾時同列，走既有 3／8／20 秒退避重試；讀取回應內容也包在同一個 try 內。重試用盡後拋 `FetchError`，回測抓取依既有規則記為當日失敗，連續 5 個平日失敗即停止（結束碼 2）。第一階段只在原本會崩潰的情況下行為改變（改為重試）。
+- 修正 B：`fetch_all` 遇未預期例外時記錄階段、中止日與錯誤摘要後返回；`run()` 照樣彙整 Parquet、寫出 `report.md`／`manifest.json`，以結束碼 1 結束。彙整本身失敗時改寫只含進度的報告。
+- C：快取 key 為 `backtest-data-v1-<run_id>`，還原用前綴 `backtest-data-v1-`，下次執行會還原 run 45775896782 存下的快取，只抓尚未快取的平日。若在 2026-11-28（含）以後執行，資料終點延伸到新的週五，各類事件只重抓最後一段。

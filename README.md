@@ -52,7 +52,7 @@ TPEx dailyQuotes、櫃買指數、事件端點與 0050 事件，並不帶 token 
 
 Actions → `run-backtest` → Run workflow，`mode = fetch`（`end_date` 空白＝最近一個已結算週五；`fetch_budget_min` 預設 300）。
 抓 2020-03-02 起 TWSE／TPEx 官方行情、事件表、股本快照與 FinMind 下市清單（不帶 token），彙整為 Parquet 存入 actions/cache；
-**不**做回測、**不**部署 Pages、**不**使用任何 Secrets。冷啟動約 1,755 個平日，一次抓不完會以結束碼 3 結束，再執行一次即接續。
+**不**做回測、**不**部署 Pages、**不**使用任何 Secrets。冷啟動約 1,755 個平日，一次抓不完會以結束碼 3 結束，再執行一次即接續。結束碼 2＝有缺漏或連續 5 個平日抓取失敗；1＝中途未預期錯誤（報告照樣寫出，已抓資料留在快取）。
 報告見該次執行的 Summary 頁與 artifact `backtest-fetch-report`（`report.md`、`manifest.json`）。本機：`python -m src.backtest.data fetch --cache-dir .cache/backtest`。
 
 ## 輸出與網頁（M5）

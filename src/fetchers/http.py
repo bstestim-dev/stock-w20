@@ -1,7 +1,7 @@
 """共用 HTTP 客戶端：禮貌間隔、重試與退避（spec_v1 第 9 節）。
 
 - 每次請求間隔 >= ``delay_sec``（預設 0.7 秒）。
-- 429、5xx、連線逾時、回應含「查詢太頻繁」或無法解析 JSON：指數退避重試，
+- 429、5xx、連線逾時、連線中途斷線（回應未讀完）、回應含「查詢太頻繁」或無法解析 JSON：指數退避重試，
   第 1 次等 3 秒、第 2 次 8 秒、第 3 次 20 秒（最多 ``max_retries`` 次）。
 - 其他 4xx 不重試；HTTP 402（FinMind 額度用盡）拋 ``QuotaExceeded``。
 - 錯誤訊息不含任何認證標頭內容（token 只放在 Authorization 標頭，不放網址）。
@@ -16,6 +16,17 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import requests
+import urllib3
+
+# 傳輸層可重試錯誤：連線失敗、逾時，以及回應讀取中途斷線（M7b 實跑 run 45775896782 遇到
+# ChunkedEncodingError「Response ended prematurely」）。重試用盡後與其他可重試錯誤一樣轉成 FetchError。
+TRANSPORT_ERRORS = (
+    requests.ConnectionError,
+    requests.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+    requests.exceptions.ContentDecodingError,
+    urllib3.exceptions.ProtocolError,
+)
 
 # TWSE RWD 端點須帶正常 User-Agent（spec 3.2B）
 DEFAULT_USER_AGENT = (
@@ -113,13 +124,13 @@ class HttpClient:
             self._last_request_at = self.clock()
             try:
                 resp = self.session.get(url, params=params, headers=req_headers, timeout=self.timeout_sec)
-            except (requests.ConnectionError, requests.Timeout) as exc:
+                status = resp.status_code
+                body = resp.content or b""
+            except TRANSPORT_ERRORS as exc:
                 last_error = f"連線失敗：{type(exc).__name__}"
                 status = None
                 continue
 
-            status = resp.status_code
-            body = resp.content or b""
             text = body.decode("utf-8", errors="replace")
 
             if status == 402:
