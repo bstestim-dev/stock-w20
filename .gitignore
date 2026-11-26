@@ -16,3 +16,4 @@ cache/
 # 執行產物由 GitHub Actions 部署到 Pages，不進版控
 site/data/*
 !site/data/.gitkeep
+site/cache/

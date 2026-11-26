@@ -51,6 +51,9 @@ def test_run_screen_spec():
     assert uses["actions/upload-pages-artifact"]["with"]["path"] == "site/"
     run = next(s for s in build["steps"] if "src.screener" in s.get("run", ""))
     assert "--cache-dir" in run["run"] and "--fetch-budget-min" in run["run"] and run["timeout-minutes"] < 30
+    assert '--restore-from "$PAGES_CACHE_URL"' in run["run"] and "--publish-cache-dir site/cache" in run["run"]
+    assert env["PAGES_CACHE_URL"] == ("https://${{ github.repository_owner }}.github.io/"
+                                      "${{ github.event.repository.name }}/cache/")
     assert deploy["needs"] == "build" and deploy["environment"]["name"] == "github-pages"
     assert deploy["steps"][0]["uses"].startswith("actions/deploy-pages@")
 

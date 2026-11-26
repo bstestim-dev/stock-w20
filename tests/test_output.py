@@ -173,4 +173,7 @@ def test_main_parses_cache_and_budget(monkeypatch):
     got = {}
     monkeypatch.setattr(sc, "run", lambda out, **k: got.update(out=out, **k) or 0)
     assert sc.main(["--out", "x", "--cache-dir", ".cache/daycache", "--fetch-budget-min", "16"]) == 0
-    assert got == {"out": "x", "cache_dir": ".cache/daycache", "fetch_budget_min": 16.0}
+    assert got == {"out": "x", "cache_dir": ".cache/daycache", "fetch_budget_min": 16.0,
+                   "restore_from": None, "publish_cache_dir": None}
+    sc.main(["--out", "x", "--cache-dir", "c", "--restore-from", "https://e.example/cache/", "--publish-cache-dir", "site/cache"])
+    assert got["restore_from"] == "https://e.example/cache/" and got["publish_cache_dir"] == "site/cache"

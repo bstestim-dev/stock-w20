@@ -87,10 +87,23 @@ M3-Q1～Q7 依 verify-api run4 實測（見 [`api-verification.md`](api-verifica
 - D5 快取：`actions/cache/restore` 取最近一次快取、`actions/cache/save` 以 `if: always()` 儲存（每次以 `run_id` 為鍵）；日資料改為「每抓完一日立即原子寫入」，並以 `--fetch-budget-min 16` 限制日資料抓取時間，超過即保存快取、以結束碼 3 結束、不更新 Pages（冷啟動 1～3 次補齊）。
 - Node 20 runtime 淘汰：兩支 workflow 的 actions 一律改用支援 Node 24 的主版本（checkout v6、setup-python v6、upload-artifact v6、cache v5、upload-pages-artifact v5、deploy-pages v5）。
 
+## 2026-11-26（Asia/Taipei）M6 裁定
+
+| 編號 | 議題 | 裁定 |
+| :--- | :--- | :--- |
+| M6-Q1 | actions/cache 超過 7 天未存取會被 GitHub 移除，兩次執行相隔超過 7 天即需冷啟動 | **B：把日資料快取放進 Pages 網站，actions/cache 不見時改從已部署網址下載回來**；不 commit 資料、不改 workflow 權限（仍為 contents: read、pages: write、id-token: write）。做法見下方「M6b 實作」。 |
+
+### M6b 實作（`src/cache_publish.py`）
+
+- 發佈：選股成功時，把 DayCache 中回溯期間內（日期 ≥ 本次歷史起日）的日檔 `YYYY-MM-DD.json.gz` 原樣複製到 `site/cache/`，並寫 `site/cache/manifest.json`（每檔名稱、位元組數、SHA-256）。複製前檢查可解壓、為 JSON、兩市皆在且 trade_date 等於檔名；不合格不發佈。總大小超過 200 MB 即整批不發佈（Pages 上限 1 GB）。只有部署成功的執行才會更新網站上的快取。
+- 還原：每次抓官方資料前，下載 `manifest.json`，只下載本機快取沒有的日檔；每檔須通過檔名格式、SHA-256、內容三項檢查，不符即丟棄、該日改由官方來源抓取。網站尚未部署（404）、網路錯誤、manifest 格式不符時不還原任何檔，全部改由官方來源抓取（等同冷啟動，16 分鐘抓取預算照常）。還原失敗不會中止選股；還原日數與丟棄檔數寫進 `latest.json` 的 notes。
+- 資料可信度：網站上的日檔是本系統先前自官方端點取得的逐位元組副本，與 actions/cache 同等對待（D5）；程式不產生或修改任何行情數值。官方若事後更正已發佈的歷史資料，快取不會自動反映，此限制與 D5 相同（見待確認 M6b-Q1）。
+- 大小估計：以約 2,400 檔、含中文名稱的模擬資料實測，一個交易日的壓縮檔約 97 KB（隨機數字壓縮率較差，屬上限估計）；60 週約 290 個交易日 → 約 28 MB，加上 `latest.json` 等約 30 MB，遠低於 Pages 1 GB 上限；每次還原最多下載約 28 MB。
+
 ## 待確認（尚未生效）
 
-本節**不構成裁定**；程式先採「現行處理」，Hector 裁定後再移至上方裁定表。
+本節**不構成裁定**；程式維持現行行為，Hector 裁定後再移至上方裁定表。
 
-| 編號 | 議題 | 規格依據與疑點 | 現行處理 |
+| 編號 | 議題 | 規格依據與疑點 | 現行行為 |
 | :--- | :--- | :--- | :--- |
-| M6-Q1 | 快取過期導致每週都冷啟動 | D5 以 `actions/cache` 保留日資料、25 分鐘驗收以有快取為準。GitHub 官方文件：超過 7 天未存取的快取會被移除。若每週五收盤後執行一次，兩次間隔可能超過 7 天，快取被移除後又需 1～3 次補齊，實務上無法每次 25 分鐘內完成。 | 維持 D5（只用 `actions/cache`）。選項：(A) 維持現狀，並建議兩次執行間隔不超過 7 天（例如週中多跑一次）；(B) 額外把日資料快取放進 Pages 產物（`site/cache/*.json.gz`，皆為公開官方行情），下次執行在 `actions/cache` 未命中時改從已部署的 Pages 網址下載，不需 commit、不需改權限；(C) 以 commit 或 Release 保存快取——需 `contents: write`，與第 8.2 節權限不符，不建議。 |
+| M6b-Q1 | 官方事後更正歷史資料時，快取如何更新 | D5 與 M6-Q1 都以「先前自官方抓取的副本」為準；官方若更正某日行情，快取（actions/cache 與網站）不會自動更新。規格未定是否需要定期或手動全量重抓。 | 不提供重抓開關。選項：(A) 維持現狀；(B) run-screen 增加第 5 個輸入 `refresh_cache`（勾選即忽略所有快取、全部自官方重抓，需 1～3 次補齊）——會改變第 8.2 節的四個輸入。 |

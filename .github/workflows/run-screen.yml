@@ -3,6 +3,8 @@
 # - FINMIND_TOKEN 只由 GitHub Secrets 注入（選配；未設定即走免費官方路線）。
 # - D5：以 actions/cache 保留 DayCache 日資料快取，抓取超時或失敗也照樣儲存；冷啟動可能需 1～3 次逐步補齊，
 #   補齊前的執行以結束碼 3 結束、不更新 Pages。第 10.1 節 25 分鐘驗收以已有快取的執行為準。
+# - M6-Q1＝B：成功時把日資料快取（公開官方行情）連同 manifest 放進 Pages 的 cache/；actions/cache 被移除
+#   （超過 7 天未存取）時，改從已部署網站下載回來（SHA-256 核對）。不 commit 資料、不改權限。
 name: run-screen
 
 on:
@@ -50,6 +52,7 @@ jobs:
       SW20_SKIP_FUNDAMENTALS: ${{ inputs.skip_fundamentals }}
       FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
       DAYCACHE_DIR: .cache/daycache
+      PAGES_CACHE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/cache/
     steps:
       - uses: actions/checkout@v6
         with:
@@ -70,7 +73,9 @@ jobs:
             daycache-
       - name: 執行選股並產出 site/data
         timeout-minutes: 24
-        run: python -m src.screener --out site/data --cache-dir "$DAYCACHE_DIR" --fetch-budget-min 16
+        run: >-
+          python -m src.screener --out site/data --cache-dir "$DAYCACHE_DIR" --fetch-budget-min 16
+          --restore-from "$PAGES_CACHE_URL" --publish-cache-dir site/cache
       - name: 儲存日資料快取（成功或失敗皆儲存）
         if: always()
         uses: actions/cache/save@v5

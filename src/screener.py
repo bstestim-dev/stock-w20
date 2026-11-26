@@ -410,11 +410,15 @@ EXIT_OK, EXIT_INCOMPLETE, EXIT_BUDGET = 0, 2, 3
 
 
 def run(out_dir: str, env: Mapping[str, str] | None = None, client=None, today: date | None = None,
-        cache_dir: str | None = None, fetch_budget_min: float | None = None) -> int:
+        cache_dir: str | None = None, fetch_budget_min: float | None = None,
+        restore_from: str | None = None, publish_cache_dir: str | None = None, pages_fetch=None) -> int:
     """抓資料 → 選股 → 參考欄 → 寫出 latest.json／latest.js／4 份 CSV。
 
     回傳 exit code：0 完成；2 歷史缺漏超過第 9 節門檻（不寫出）；
     3 日資料抓取超過 ``fetch_budget_min`` 分鐘（D5 冷啟動：已抓到的日資料已寫入 ``cache_dir``，不寫出，請再執行一次）。
+
+    ``restore_from``：已部署網站的 ``cache/`` 網址；抓官方資料前先補回本機快取沒有的日檔（M6-Q1＝B）。
+    ``publish_cache_dir``：成功時把回溯期間內的日檔與 manifest 寫到此目錄（隨 Pages 部署）。
     """
     import os
     import sys
@@ -436,6 +440,12 @@ def run(out_dir: str, env: Mapping[str, str] | None = None, client=None, today: 
     today = today or today_taipei()
     requested_end = opts.as_of_date or today
     cache = DayCache(cache_dir) if cache_dir else None
+    pre_notes: list[str] = []
+    if cache_dir and restore_from:
+        from src.cache_publish import http_fetch, restore_from_pages
+        rr = restore_from_pages(restore_from, cache_dir, fetch=pages_fetch or http_fetch)
+        pre_notes += rr.notes
+        print(f"網站快取還原：新增 {rr.restored}、本機已有 {rr.already}、丟棄 {len(rr.failed)}", flush=True)
     deadline = time.monotonic() + fetch_budget_min * 60 if fetch_budget_min else None
     t0 = time.monotonic()
     n = [0]
@@ -458,7 +468,7 @@ def run(out_dir: str, env: Mapping[str, str] | None = None, client=None, today: 
     res = screen(inp, cfg)
 
     fundamentals: dict[str, dict] = {}
-    notes: list[str] = []
+    notes: list[str] = list(pre_notes)
     if ds.get("enable_optional_fundamentals", True):
         codes = {r["stock_id"]: r["market"] for tab in res["tabs"].values() for r in tab
                  if r["asset_type"] == "common_stock"}
@@ -469,6 +479,11 @@ def run(out_dir: str, env: Mapping[str, str] | None = None, client=None, today: 
     errors = [n for n in inp.notes if n.startswith("缺漏交易日")]
     latest = build_latest(res, format_taipei_iso(now_taipei()), fundamentals, notes=notes, errors=errors)
     paths = write_site_data(latest, out_dir)
+    if cache_dir and publish_cache_dir:
+        from src.cache_publish import publish_cache
+        pub = publish_cache(cache_dir, publish_cache_dir, inp.history_start, latest["generated_at_taipei"])
+        print(f"日資料快取放進網站：{pub['published']} 檔、{pub['bytes'] / 1e6:.1f} MB"
+              + (f"；{pub['note']}" if pub["note"] else ""), flush=True)
     print(f"完成：基準日 {latest['as_of_date']}，寫出 {', '.join(p.name for p in paths)}（請求 {len(client.logs)} 次）")
     return 0
 
@@ -481,8 +496,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cache-dir", default=None, help="DayCache 目錄（GitHub Actions 以 actions/cache 保留）")
     ap.add_argument("--fetch-budget-min", type=float, default=None,
                     help="日資料抓取時間上限（分鐘）；超過即保存快取並以結束碼 3 結束")
+    ap.add_argument("--restore-from", default=None, help="已部署網站的 cache/ 網址（actions/cache 不見時還原）")
+    ap.add_argument("--publish-cache-dir", default=None, help="成功時把日資料快取與 manifest 寫到此目錄（隨 Pages 部署）")
     a = ap.parse_args(argv)
-    return run(a.out, cache_dir=a.cache_dir, fetch_budget_min=a.fetch_budget_min)
+    return run(a.out, cache_dir=a.cache_dir, fetch_budget_min=a.fetch_budget_min,
+               restore_from=a.restore_from, publish_cache_dir=a.publish_cache_dir)
 
 
 if __name__ == "__main__":

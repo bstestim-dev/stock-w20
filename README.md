@@ -69,7 +69,9 @@ build 成功後 deploy 自動更新 Pages。
 日資料快取（D5）：每次執行先還原上次的 `actions/cache`，日資料每抓完一日即寫入，成功或失敗都會儲存。
 **第一次（冷啟動）**約需 30 分鐘以上的抓取，超過 16 分鐘的抓取預算即以結束碼 3 結束（紅叉，訊息「請再執行一次以補齊」），
 Pages 不更新；再按一次 Run workflow 接續抓取，通常 1～3 次補齊。補齊後的執行只抓新增的交易日。
-GitHub 會移除超過 7 天未存取的快取，兩次執行相隔超過 7 天時會再冷啟動（見 docs/decisions.md「M6-Q1」）。
+成功的執行另會把日資料快取（公開官方行情）連同 SHA-256 清單放進網站 `cache/`（約 30 MB）。
+GitHub 會移除超過 7 天未存取的 actions/cache；此時程式改從 https://bstestim-dev.github.io/stock-w20/cache/ 下載回來，
+不需冷啟動（M6-Q1＝B）。網站上的檔若未通過雜湊或格式檢查即丟棄、改由官方來源重抓。
 
 結束碼：0 完成；2 歷史缺漏超過第 9 節門檻（不發佈）；3 冷啟動抓取預算用盡（快取已保存，請再執行）。
 
@@ -82,5 +84,5 @@ GitHub 會移除超過 7 天未存取的快取，兩次執行相隔超過 7 天�
 | M3 | 還原價、真正週 K、指標、週結算判定 | 完成（verify-api run4；裁定 M3-Q1～Q7 見 docs/decisions.md） |
 | M4 | 選股引擎 | 完成（m4_dry_run run 45597664068；裁定 M4-Q1～Q12、M4b-Q1） |
 | M5 | 輸出與靜態網頁 | 完成（m5_preview run 45621969504；裁定 M5-Q1～Q3；M5b 修正列高） |
-| M6 | GitHub Actions 與 Pages 部署 | 程式完成，待 run-screen 實跑與待確認 M6-Q1 |
+| M6 | GitHub Actions 與 Pages 部署 | 程式完成（含 M6b 網站快取），待 run-screen 實跑 |
 | M7 | 第二階段回測 | 第一階段驗收後才開始 |
