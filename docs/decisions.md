@@ -111,3 +111,9 @@ M3-Q1～Q7 依 verify-api run4 實測（見 [`api-verification.md`](api-verifica
 | 編號 | 議題 | 裁定 |
 | :--- | :--- | :--- |
 | AC-4 | 出場分頁未顯示 FR-1.7「週中警戒（尚未週結算）」字樣（Hector 線上確認步驟 8 發現） | **修法 A：只改網頁標籤**，JSON／CSV 的 `exit_action_note` 維持 M4-Q8 定案文字。`EXIT_CONFIRMED` → 紅色標籤「跌破週 20MA：建議下週一開盤賣」（與說明相同，不重複顯示）；`MIDWEEK_WARNING` → 橘黃色標籤「週中警戒（尚未週結算）」，後接第 4.6 節說明；整格單行截斷，滑鼠停留看全文。驗收對照見 `docs/acceptance-phase1.md`。 |
+
+## 2026-11-26（Asia/Taipei）網頁「更新資料」連結
+
+| 編號 | 議題 | 裁定 |
+| :--- | :--- | :--- |
+| UI-1 | 網頁頂部手動更新入口 | 加一般超連結「更新資料 ↗」，新分頁開啟 `https://github.com/bstestim-dev/stock-w20/actions/workflows/run-screen.yml`，由 Hector 登入後自行按 Run workflow；旁註「前往 GitHub 手動執行 run-screen，約 15 分鐘後網頁更新」，滑鼠停留另有完整說明。網頁不呼叫 GitHub API、不觸發 workflow、不含任何 token；選股規則、資料與 JSON／CSV 輸出不變。 |

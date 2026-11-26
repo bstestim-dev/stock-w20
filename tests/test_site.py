@@ -77,3 +77,17 @@ def test_exit_note_text_in_data_unchanged():
     from src.screener import EXIT_NOTES
     assert EXIT_NOTES["EXIT_CONFIRMED"] == "跌破週 20MA：建議下週一開盤賣"
     assert EXIT_NOTES["MIDWEEK_WARNING"] == "週中收盤低於暫定週 20MA，待週五收盤確認，第一階段不構成賣訊"
+
+
+def test_update_link_is_plain_hyperlink():
+    """頂部「更新資料」：一般超連結開新分頁到 run-screen 的 Actions 頁面；網頁不呼叫 GitHub API、不觸發 workflow、不含 token。"""
+    h = html()
+    m = re.search(r'<a id="runLink"[^>]*>([^<]*)</a>', h, re.S)
+    assert m and m.group(1).startswith("更新資料")
+    tag = m.group(0)
+    assert 'href="https://github.com/bstestim-dev/stock-w20/actions/workflows/run-screen.yml"' in tag
+    assert 'target="_blank"' in tag and 'rel="noopener noreferrer"' in tag and "title=" in tag
+    assert '<span class="runhint">前往 GitHub 手動執行 run-screen，約 15 分鐘後網頁更新</span>' in h
+    site = h + (SITE / "app.js").read_text(encoding="utf-8")
+    for bad in ("api.github.com", "dispatches", "workflow_dispatch", "Authorization", "Bearer", "ghp_", "github_pat_", "token="):
+        assert bad not in site, bad

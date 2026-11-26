@@ -62,7 +62,9 @@ pytest
 2. Settings → Actions → General → Actions permissions 允許執行 GitHub 官方 actions（`actions/*`）；Workflow permissions 維持預設即可（權限由 workflow 檔自行宣告）。
 3. （選配）Settings → Secrets and variables → Actions → New repository secret：`FINMIND_TOKEN`。未設定時走免費官方路線，本系統第一階段不需要。
 
-每次執行：Actions → **run-screen** → Run workflow（branch `main`）。四個輸入皆可留預設：
+每次執行：Actions → **run-screen** → Run workflow（branch `main`）。網頁頂部的「更新資料 ↗」連結會在新分頁開啟
+https://github.com/bstestim-dev/stock-w20/actions/workflows/run-screen.yml ，登入有權限的帳號後按 Run workflow 即可
+（一般超連結，網頁本身不呼叫 GitHub API、不觸發 workflow、不含 token）。四個輸入皆可留預設：
 `as_of_date`（空白＝最新可用交易日）、`lookback_weeks`（空白＝config 的 60 週）、`volume_spike_ratio`（1.5）、`skip_fundamentals`（不勾）。
 build 成功後 deploy 自動更新 Pages。
 

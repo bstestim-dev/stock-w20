@@ -69,3 +69,9 @@ tbody tr.row.open td:first-child { background: #eef5ff; }
 .badge.exit-midweek { color: #7a4d00; background: #fff3cd; border-color: #f0b400; font-weight: 600; }
 td.clipcell.exitcell, .clip.exitnote { max-width: 420px; }
 .exitdesc { color: var(--muted); margin-left: 4px; }
+/* 手動更新入口（一般超連結，開新分頁到 GitHub Actions） */
+.runbox { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.runlink { color: var(--accent); text-decoration: none; border: 1px solid #9ec5fe; padding: 2px 10px; border-radius: 6px;
+           font-size: 13px; background: #f0f6ff; }
+.runlink:hover { background: #dbeafe; }
+.runhint { color: var(--muted); font-size: 12px; }
