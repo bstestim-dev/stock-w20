@@ -91,3 +91,12 @@ def test_update_link_is_plain_hyperlink():
     site = h + (SITE / "app.js").read_text(encoding="utf-8")
     for bad in ("api.github.com", "dispatches", "workflow_dispatch", "Authorization", "Bearer", "ghp_", "github_pat_", "token="):
         assert bad not in site, bad
+
+
+def test_chart_library_has_sri():
+    h = html()
+    tags = re.findall(r'<script\b[^>]*\bsrc="https://cdn\.jsdelivr\.net/npm/lightweight-charts@4\.1\.1/[^"]*"[^>]*>', h)
+    assert len(tags) == 1
+    tag = tags[0]
+    assert 'integrity="sha384-2Yiz1jBuc53MdRCA3ojcpk7cAoW2uFfKcetY6JKbqUetb537Hq2uPJrqM1Mj2AKx"' in tag
+    assert 'crossorigin="anonymous"' in tag
