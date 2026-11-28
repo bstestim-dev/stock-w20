@@ -1,4 +1,4 @@
-# 林恩如週 20MA 選股系統（stock-w20）
+# 週 20MA 選股系統（stock-w20）
 
 台股（TWSE 上市／TPEx 上櫃）週線順勢選股的盤後研究工具。每次以 GitHub Actions 手動觸發（`workflow_dispatch`），當場向官方端點抓取歷史行情、計算向後還原價與真正週 K，產出選股名單並發佈至 GitHub Pages。
 
